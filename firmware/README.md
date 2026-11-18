@@ -63,7 +63,7 @@ certutil -hashfile dev_readback2.bin SHA256   :: 应等于 02_boot.img 的 sha25
 | `01_gpt_bootarea_l10h.img` | 9,437,696 B | `0x00000000` | 分区表 + 引导段内嵌 **L10-H**（日常用，可 U 盘启动） |
 | `01_gpt_bootarea_l10g.img` | 9,437,696 B | `0x00000000` | 分区表 + 引导段内嵌 **L10-G**（要 rockusb 反复刷机用） |
 | `02_boot.img`（L10 版） | 402,653,184 B | `0x00008000` | BOOT 分区整镜像：6.12.81-rk35xx-flippy 内核（MPP 硬解全开）+ **RGMII 魔数已修 dtb**（tx=0x22 / rx=0x15） |
-| `03_rootfs.img`（L10 版） | 1,180,696,576 B | `0x000C8000` | rootfs（首次启动自动扩容），配套 6.12.81 模块，**内置 dtbfix 开机自愈**（eth0 拿不到 IP 时自动重扫魔数并重启，最多尝试 2 次） |
+| `03_rootfs.img`（L10 版） | 1,180,696,576 B | `0x000C8000` | rootfs（首次启动自动扩容），配套 6.12.81-ophub 补丁内核模块；网络自愈由内核开机自检接管（dtbfix 已退役） |
 | `p3_armbian_slim.img` | 1,678,770,176 B | — | U 盘整盘镜像（Rufus / Etcher 写 U 盘做 U 盘系统）；rootfs 分区首启自动扩满整盘 |
 | `p3boot` | 1,521 B | — | U 盘 / eMMC 启动目标切换脚本（`p3boot usb` / `emmc` / `clear` / `status`，跑在盒子 U-Boot 环境里） |
 | `04_backup_gpt.img` | 16,896 B | `0x01D1EFDF` | 与 v2 共用同一份盘尾备份 GPT |
