@@ -1,0 +1,17 @@
+!.gitignore
+/build
+/tmp_dir
+/build-armbian/kernel
+/build-armbian/u-boot/*
+!/build-armbian/u-boot/rockchip/
+/build-armbian/u-boot/rockchip/*
+!/build-armbian/u-boot/rockchip/p3-wxy4/
+/compile-kernel/kernel
+/compile-kernel/output
+/compile-kernel/tools/armbian
+.DS_Store
+npm-debug.log*
+*.rej
+*.orig
+*~
+\#*#

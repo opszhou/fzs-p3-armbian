@@ -1,0 +1,3 @@
+7ff83efe65274c80db792a0899adaec3c069edb56e1482f483861e0c7397c9de  01_gpt_bootarea.img
+b9c6bda65c738176aef65810451377e3d32af2db0e8c45b726f670f4f605e2f2  04_backup_gpt.img
+02_boot.img 3fbacdd71abb298a... - flash @0x8000
