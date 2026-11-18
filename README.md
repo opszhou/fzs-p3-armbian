@@ -1,6 +1,6 @@
 # p3-armbian — 蜂助手 P3 (RK3566) 专属仓库
 
-**设备**：蜂助手 P3 / 网心云 OEC-turbo-4g（RK3566 / 2GB DDR4 / 16GB eMMC）
+**设备**：蜂助手 P3（RK3566 / 2GB DDR4 / 16GB eMMC）
 **当前系统**：Armbian 26.11 noble，自编补丁内核 `6.12.81-ophub`（真机全项验证：显示 / HDMI 音频 / CEC / 千兆网络 / MPP 硬解）
 
 本仓库从 ophub/amlogic-s9xxx-armbian fork 而来，已按 P3 为本重构：只保留内核构建框架
