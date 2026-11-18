@@ -33,7 +33,7 @@ rockusb LOADER 能力层（0x1A/0xAA/0x2A/0x2B）。
 1. **bootarea 扩容**：u-boot.itb 从 979,968 B 增至 980,480 B，旧 bootarea
    （18297 LBA）差 512 B 装不下。v2 刷机包已把 bootarea 扩到 **18432 LBA**，
    扩容落在 BOOT 分区（LBA 32768）前的空地，GPT 分区表条目零变化。
-   配套产物见 [flashkit/](../flashkit/)。
+   配套产物见 [firmware/](../firmware/)。
 2. **rockusb 芯片串号回填**（`f_rockusb.c` `cb_get_chip_version`）：
    BootROM 芯片串为空时回填静态串 `"320A" + 2026 + 1112 + V100`，
    rkdeveloptool `0x1B` 不再返回 16 字节全零。
@@ -56,14 +56,14 @@ G 模式电脑刷机、H 模式 U 盘启动、进系统千兆网通。
 
 - **G / H 互斥**：一个 USB 口不能同时当主机和设备；写哪个 bin，下次就按哪个模式启动。
   启动时串口打印模式表，`<== active` 标在哪个模式当前就是哪个（波特率 1500000）。
-- `flashkit/01_gpt_bootarea_l10h.img` / `_l10g.img` 的引导段（`0x40` 起）已内嵌对应
+- `firmware/01_gpt_bootarea_l10h.img` / `_l10g.img` 的引导段（`0x40` 起）已内嵌对应
   模式的 L10 固件，选好 01 后一般无需单独刷引导；后写的生效（引导段与单独刷 `0x40` 重叠）。
 - L10 与 L9 是两条独立引导链，不共用 idbloader，**不要混搭**。
 
 ## 刷写方法
 
 - L9：直接刷 v2 两件套（01_gpt_bootarea.img @0x0 + 02_boot.img @0x8000），
-  见 [flashkit/README.md](../flashkit/README.md)；单独换引导层
+  见 [firmware/README.md](../firmware/README.md)；单独换引导层
   `upgrade_tool wl 0x40 u-boot-rockchip.bin`（idbloader 起整包）与 UMS 通道仍适用。
 - L10：随 L10 套件刷 `01_gpt_bootarea_l10h.img` / `_l10g.img`（引导段已内嵌）；
   单独换引导 `upgrade_tool wl 0x40 u-boot-L10-H.bin`（G 模式用 `-G`）。
