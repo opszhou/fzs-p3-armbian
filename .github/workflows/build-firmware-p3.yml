@@ -212,13 +212,32 @@ jobs:
           GOT=\$(sha256sum \$F | awk '{print \$1}')
           [ "\$GOT" = "\$EXPECT" ] || { echo SHA_MISMATCH; exec sh; }
           echo "step 3/5: writing partitions at LBA\$DATA_START (boot+rootfs) - DO NOT POWER OFF"
+          TOTAL=\$((DATA_SECT * 512))
+          T0=\$(date +%s)
           (xzcat \$F | dd of=/dev/mmcblk0 bs=512 seek=\$DATA_START conv=fsync 2>/tmp/dd.err) & P=\$!
-          while kill -0 \$P 2>/dev/null; do sleep 5; echo "  writing..."; done
+          while kill -0 \$P 2>/dev/null; do
+            sleep 5; EL=\$(( \$(date +%s) - T0 ))
+            W=\$(grep write_bytes /proc/\$P/io 2>/dev/null | head -n1 | awk '{print \$2}')
+            if [ -n "\$W" ] && [ "\$W" -gt 0 ] 2>/dev/null; then
+              echo "  writing... \${EL}s  \$(( W / 1048576 ))MB / \$(( TOTAL / 1048576 ))MB (\$(( W * 100 / TOTAL ))%)"
+            else
+              echo "  writing... \${EL}s"
+            fi
+          done
           wait \$P; RC=\$?; cat /tmp/dd.err
           [ \$RC -eq 0 ] || { echo WRITE_FAIL; exec sh; }
           echo "step 4/5: readback verify \$DATA_SECT sectors from LBA\$DATA_START"
+          T0=\$(date +%s)
           (dd if=/dev/mmcblk0 bs=512 skip=\$DATA_START count=\$DATA_SECT 2>/dev/null | sha256sum >/tmp/v.out) & P=\$!
-          while kill -0 \$P 2>/dev/null; do sleep 5; echo "  reading..."; done
+          while kill -0 \$P 2>/dev/null; do
+            sleep 5; EL=\$(( \$(date +%s) - T0 ))
+            R=\$(grep rchar /proc/\$P/io 2>/dev/null | head -n1 | awk '{print \$2}')
+            if [ -n "\$R" ] && [ "\$R" -gt 0 ] 2>/dev/null; then
+              echo "  reading... \${EL}s  \$(( R / 1048576 ))MB / \$(( TOTAL / 1048576 ))MB (\$(( R * 100 / TOTAL ))%)"
+            else
+              echo "  reading... \${EL}s"
+            fi
+          done
           wait \$P; cat /tmp/v.out
           grep -q \$DATA_SHA /tmp/v.out && { echo FLASH_OK; sync; sleep 3; reboot -f; } || { echo READBACK_MISMATCH; exec sh; }
           INIT
