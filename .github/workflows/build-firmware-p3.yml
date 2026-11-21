@@ -245,12 +245,15 @@ jobs:
           FIT=../../build/output/p3-installer-${KERNEL_VER}.fit
           mkdir -p ../../build/output
           mkimage -f ${W}/i.its ${FIT}
-          FSHA=$(sha256sum ${FIT} | awk '{print $1}')
+          # release delivers compressed packages only: FIT ships as .fit.gz
+          gzip -9 ${FIT}
+          FITGZ=${FIT}.gz
+          FSHA=$(sha256sum ${FITGZ} | awk '{print $1}')
 
           # FIT embeds NO U-Boot; bootarea is preserved on the board.
           # basic U-Boot sha was gated at source above (BASIC_SHA) as the paired bootloader.
-          printf '%s  p3-installer-%s.fit\n' "${FSHA}" "${KERNEL_VER}" > ../../build/output/FIT_SHA256.txt
-          echo "FIT built: ${FIT} sha=${FSHA}"
+          printf '%s  p3-installer-%s.fit.gz\n' "${FSHA}" "${KERNEL_VER}" > ../../build/output/FIT_SHA256.txt
+          echo "FIT built: ${FITGZ} sha=${FSHA}"
           echo "FIT_VER=${KERNEL_VER}" >> ${GITHUB_ENV}
           rm -rf ${W}
 
@@ -285,13 +288,13 @@ jobs:
           sudo mkdir -p /mnt/slimchk && sudo mount -o ro ${LOOP}p1 /mnt/slimchk
           sudo ls /mnt/slimchk/extlinux/extlinux.conf /mnt/slimchk/Image /mnt/slimchk/uInitrd > /dev/null && echo "slim p1 OK"
           sudo umount /mnt/slimchk && sudo losetup -d ${LOOP}
-          gzip -k9 slim.raw && mv slim.raw.gz p3_armbian_slim.img.gz
-          # keep the UNCOMPRESSED full-disk image as the second deliverable format
-          mv slim.raw p3_armbian_full-${KERNEL_VER}.img
-          echo "full img: $(du -m p3_armbian_full-${KERNEL_VER}.img | cut -f1)MB"
+          # release ships compressed packages ONLY: full-disk image as .img.gz,
+          # no uncompressed img artifact (gunzip/Rufus/Etcher handle it directly)
+          gzip -k9 slim.raw && mv slim.raw.gz p3_armbian_full-${KERNEL_VER}.img.gz && rm slim.raw
+          echo "full img.gz: $(du -m p3_armbian_full-${KERNEL_VER}.img.gz | cut -f1)MB"
 
           # ---- 校验清单 ----
-          sha256sum gpt.img u-boot-basic.bin p3boot 02_boot.img 03_rootfs.img p3_armbian_slim.img.gz p3_armbian_full-${KERNEL_VER}.img > SHA256SUMS.txt
+          sha256sum gpt.img u-boot-basic.bin p3boot 02_boot.img 03_rootfs.img p3_armbian_full-${KERNEL_VER}.img.gz > SHA256SUMS.txt
           [ -f FIT_SHA256.txt ] && cat FIT_SHA256.txt >> SHA256SUMS.txt || true
           cat SHA256SUMS.txt
           # unique tag per build: kernel version + UTC timestamp, keeps history
@@ -313,13 +316,12 @@ jobs:
           body: |
             ### P3 固件套件（CI 构建，内核 ${{ env.KERNEL_VER }}）
 
-            每次构建产出**两种完整系统镜像**，二选一刷入：
+            所有 fit / img 均以**压缩包**发布，刷机前先解压：
 
             | 格式 | 文件 | 用途 |
             |---|---|---|
-            | **FIT（webflash）** | `p3-installer-${{ env.FIT_VER }}.fit` | 网页上传安装：预配置 Armbian 26.11 noble；只写 boot/rootfs 分区 LBA32768+，**不动 U-Boot 引导区** |
-            | **整盘 img（直刷）** | `p3_armbian_full-${{ env.KERNEL_VER }}.img` | 未压缩完整盘：GPT+basic U-Boot+boot+rootfs，RKDevTool/dd 一次写 eMMC |
-            | 整盘 img 压缩版 | `p3_armbian_slim.img.gz` | 同上但 gzip 压缩，U 盘 Rufus/Etcher 写入 |
+            | **FIT（webflash）** | `p3-installer-${{ env.FIT_VER }}.fit.gz` | `gunzip` 解压后网页上传安装：预配置 Armbian 26.11 noble；只写 boot/rootfs 分区 LBA32768+，**不动 U-Boot 引导区** |
+            | **整盘 img（直刷）** | `p3_armbian_full-${{ env.KERNEL_VER }}.img.gz` | 完整盘压缩包：GPT+basic U-Boot+boot+rootfs；Rufus/Etcher 可直接写 `.gz`，`dd` 前先 `gunzip` |
 
             配套小件（分件刷机 / 引导）：
 
