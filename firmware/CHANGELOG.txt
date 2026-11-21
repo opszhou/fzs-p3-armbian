@@ -1,3 +1,8 @@
+2026-11-21: firmware/ 刷机小件改为两件式 - 删除 01_gpt_bootarea(.img/_l10h/_l10g)，
+新增 gpt.img(32KiB, @0x0) 与 u-boot-basic.bin(9,378,304B, @0x40, basic 档 webflash 引导)。
+GPT 与固件分离，二者独立演进。配套 webflash installer FIT v2
+(p3-installer-v2.fit: basic U-Boot + Armbian 26.04 minimal 整盘流式安装)。
+
 P3 TV Box - Custom Bootloader Flash Kit (v2 / L9 boot chain)
 =============================================================
 All file names, paths and RKDevTool "Name" cells are ASCII on purpose.
