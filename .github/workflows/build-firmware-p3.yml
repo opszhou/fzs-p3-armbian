@@ -113,25 +113,26 @@ jobs:
           rmdir ${M}
           echo "injection done"
 
-      - name: Build webflash installer FIT (inlined, uses basic U-Boot)
+      - name: Build webflash installer FIT (partitions only, bootarea preserved)
         run: |
           set -e
           sudo apt-get update -qq
           sudo apt-get install -y -qq u-boot-tools xz-utils cpio e2fsprogs fdisk >/dev/null
 
-          # Source parts: base rootfs (26.11 noble + 6.12.81), busybox, basic U-Boot
+          # Source parts: base rootfs (26.11 noble + 6.12.81), busybox.
+          # FIT contains NO U-Boot: installer writes only LBA32768+ (boot/rootfs),
+          # preserving whatever U-Boot is on the board (pro/basic/any version).
           mkdir -p build/fit && cd build/fit
           for f in p3-rootfs-base-26.11.img busybox-arm64; do
             curl -fsSL --retry 5 -H "Accept: application/octet-stream" \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               "https://github.com/${KERNEL_REPO}/releases/download/fit_base/${f}" -o ${f}
           done
-          cp ../../firmware/u-boot-basic.bin ./u-boot-basic.bin
-          BASIC_SHA=$(sha256sum u-boot-basic.bin | awk '{print $1}')
-          echo "basic U-Boot sha=${BASIC_SHA}"
-          # hard gate: the FIT must embed the webflash no-refresh basic build
+          # paired bootloader check: released basic U-Boot must be the webflash-fix build
+          BASIC_SHA=$(sha256sum ../../firmware/u-boot-basic.bin | awk '{print $1}')
+          echo "paired basic U-Boot sha=${BASIC_SHA}"
           [ "${BASIC_SHA}" = "41d45fecbf60a7740cba25b17585570ebd5fd3b04c095943742d518b0043b59f" ] \
-            || { echo "ERROR: u-boot-basic.bin is not the expected webflash fix build"; exit 1; }
+            || { echo "ERROR: paired u-boot-basic.bin is not the expected webflash fix build"; exit 1; }
 
           # kernel Image + board dtb from the injected 02_boot.img
           M=$(mktemp -d)
@@ -167,27 +168,26 @@ jobs:
           [ "${NEWROOT}" = "${ROOT_SHADOW}" ] || { echo "root shadow write failed"; exit 1; }
           echo "rootfs preconfig OK"
 
-          # 2) assemble system.img: GPT + basic U-Boot@LBA64 + (empty boot) + rootfs@LBA819200 + backup GPT
-          TOTAL=3125281; SEC=512; UBOOT_LBA=64; BOOT_LBA=32768; ROOTFS_LBA=819200
-          truncate -s $((TOTAL*SEC)) ${W}/system.img
-          dd if=u-boot-basic.bin of=${W}/system.img bs=512 seek=${UBOOT_LBA} conv=notrunc status=none
-          dd if=${W}/rootfs.img of=${W}/system.img bs=512 seek=${ROOTFS_LBA} conv=notrunc status=none
-          cat > ${W}/pt <<PT
-          label: gpt
-          label-id: F42F06FF-9B95-43E3-8B10-8B06CCF0208A
-          unit: sectors
-          first-lba: 2048
-          last-lba: $((TOTAL-33))
-          sector-size: 512
-          start=${BOOT_LBA}, size=786432, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=F4FAEA99-EC94-4949-85D5-DB70858B6403, name="boot"
-          start=${ROOTFS_LBA}, size=2306048, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=0694B19B-A638-45DC-BCCE-BD2F3AC31A99, name="rootfs"
-          PT
-          sfdisk --force ${W}/system.img < ${W}/pt >/dev/null 2>&1
-          RAWSHA=$(sha256sum ${W}/system.img | awk '{print $1}')
-          echo "system.img sha=${RAWSHA}"
+          # 2) assemble data image: ONLY partition area from LBA32768 onward.
+          #    LBA0-32767 (protective MBR + GPT + U-Boot bootarea) is NEVER touched
+          #    by the installer, so whatever U-Boot the board has (pro/basic/any)
+          #    is preserved. This is a hard product rule.
+          TOTAL=3125281; SEC=512; BOOT_LBA=32768; ROOTFS_LBA=819200; ROOTFS_SECTORS=2306048
+          DATA_START=${BOOT_LBA}                              # 32768
+          # write exactly boot + rootfs partitions; do NOT touch main GPT, bootarea, or backup GPT
+          DATA_SECT=$((ROOTFS_LBA + ROOTFS_SECTORS - DATA_START))   # 3125248-32768 = 3092480 sectors
+          truncate -s $((DATA_SECT*SEC)) ${W}/data.img
+          # boot partition @relative LBA0 (the injected 02_boot.img with 6.12.81 kernel
+          # + extlinux), rootfs @relative (ROOTFS_LBA-DATA_START). Neither touches bootarea.
+          dd if=../../build/base/02_boot.img of=${W}/data.img bs=512 seek=0 conv=notrunc status=none
+          dd if=${W}/rootfs.img of=${W}/data.img bs=512 seek=$((ROOTFS_LBA-DATA_START)) conv=notrunc status=none
+          # build a standalone GPT for the data segment? NO - we keep the board's GPT.
+          # data.img is a raw partition-content blob; installer writes it at LBA32768.
+          DATA_SHA=$(sha256sum ${W}/data.img | awk '{print $1}')
+          echo "data.img sha=${DATA_SHA} sectors=${DATA_SECT} (maps to disk LBA ${DATA_START}..$((TOTAL-1)))"
 
           # 3) xz compress
-          xz -T0 -9 -c ${W}/system.img > ${W}/system.img.xz
+          xz -T0 -9 -c ${W}/data.img > ${W}/system.img.xz
           XZSHA=$(sha256sum ${W}/system.img.xz | awk '{print $1}')
 
           # 4) installer initramfs (busybox + init with dynamic sha)
@@ -202,22 +202,24 @@ jobs:
           export PATH=/bin
           F=/system.img.xz
           EXPECT=${XZSHA}
-          RAWSHA=${RAWSHA}
-          RAWSECT=${TOTAL}
+          DATA_SHA=${DATA_SHA}
+          DATA_START=${DATA_START}
+          DATA_SECT=${DATA_SECT}
           echo
           echo "=== P3 webflash installer (kernel ${KERNEL_VER}, Armbian 26.11 noble) ==="
+          echo "NOTE: bootarea (LBA0-32767: GPT + U-Boot) is PRESERVED, never written."
           GOT=\$(sha256sum \$F | awk '{print \$1}')
           [ "\$GOT" = "\$EXPECT" ] || { echo SHA_MISMATCH; exec sh; }
-          echo "step 3/5: writing to /dev/mmcblk0 - DO NOT POWER OFF"
-          (xzcat \$F | dd of=/dev/mmcblk0 bs=512 conv=fsync 2>/tmp/dd.err) & P=\$!
+          echo "step 3/5: writing partitions at LBA\$DATA_START (boot+rootfs) - DO NOT POWER OFF"
+          (xzcat \$F | dd of=/dev/mmcblk0 bs=512 seek=\$DATA_START conv=fsync 2>/tmp/dd.err) & P=\$!
           while kill -0 \$P 2>/dev/null; do sleep 5; echo "  writing..."; done
           wait \$P; RC=\$?; cat /tmp/dd.err
           [ \$RC -eq 0 ] || { echo WRITE_FAIL; exec sh; }
-          echo "step 4/5: readback verify \$RAWSECT sectors"
-          (dd if=/dev/mmcblk0 bs=512 count=\$RAWSECT 2>/dev/null | sha256sum >/tmp/v.out) & P=\$!
+          echo "step 4/5: readback verify \$DATA_SECT sectors from LBA\$DATA_START"
+          (dd if=/dev/mmcblk0 bs=512 skip=\$DATA_START count=\$DATA_SECT 2>/dev/null | sha256sum >/tmp/v.out) & P=\$!
           while kill -0 \$P 2>/dev/null; do sleep 5; echo "  reading..."; done
           wait \$P; cat /tmp/v.out
-          grep -q \$RAWSHA /tmp/v.out && { echo FLASH_OK; sync; sleep 3; reboot -f; } || { echo READBACK_MISMATCH; exec sh; }
+          grep -q \$DATA_SHA /tmp/v.out && { echo FLASH_OK; sync; sleep 3; reboot -f; } || { echo READBACK_MISMATCH; exec sh; }
           INIT
           chmod +x $I/init
           (cd $I && find . -print0 | cpio --null -o -H newc | gzip -9 > ${W}/initrd.gz)
@@ -240,9 +242,8 @@ jobs:
           mkimage -f ${W}/i.its ${FIT}
           FSHA=$(sha256sum ${FIT} | awk '{print $1}')
 
-          # verify bootarea embeds the exact basic U-Boot
-          UBSHA=$(dd if=${W}/system.img bs=512 skip=64 count=$(( $(stat -c%s u-boot-basic.bin)/512 )) 2>/dev/null | sha256sum | awk '{print $1}')
-          [ "${UBSHA}" = "${BASIC_SHA}" ] || { echo "bootarea U-Boot mismatch"; exit 1; }
+          # FIT embeds NO U-Boot; bootarea is preserved on the board.
+          # basic U-Boot sha was gated at source above (BASIC_SHA) as the paired bootloader.
           printf '%s  p3-installer-%s.fit\n' "${FSHA}" "${KERNEL_VER}" > ../../build/output/FIT_SHA256.txt
           echo "FIT built: ${FIT} sha=${FSHA}"
           echo "FIT_VER=${KERNEL_VER}" >> ${GITHUB_ENV}
@@ -309,7 +310,7 @@ jobs:
             | 03_rootfs.img | rootfs 分区（首启自动扩容）`wl 0xC8000` |
             | p3_armbian_slim.img.gz | U 盘整盘镜像（Rufus/Etcher 写入） |
             | p3boot | U 盘 / eMMC 启动切换脚本 |
-            | p3-installer-${{ env.FIT_VER }}.fit | webflash 整盘 installer FIT（内嵌 basic U-Boot 修复版 + 预配置 Armbian 26.11 noble） |
-            - 用 FIT 前先刷仓库 `firmware/u-boot-basic.bin`（webflash 免刷新修复版，sha 41d45fec）到 LBA64，FIT 写盘会再次写入同一 basic
+            | p3-installer-${{ env.FIT_VER }}.fit | webflash installer FIT（预配置 Armbian 26.11 noble；只写 boot/rootfs 分区 LBA32768+，**不动 U-Boot 引导区**） |
+            - FIT 不含 U-Boot、写盘从 LBA32768 起：板上现有引导固件（pro/basic/任意版本）保持不变。webflash 免刷新需先自行刷入 `firmware/u-boot-basic.bin`（sha 41d45fec）或含修复的引导
             - SHA256SUMS.txt 覆盖以上全部文件
             - 刷机命令见仓库 `firmware/README.md`
