@@ -1,3 +1,7 @@
+2026-11-21: u-boot-basic.bin 更新为 webflash 免刷新 bootm 修复版 (sha 41d45fec, 9,383,424B, @0x40)。
+修复: /result 响应体先发完再关连接; mtk_tcp_periodic_check 在 stop 后 5s 强制退出 net_loop;
+booting.html 成功后自动 reload 断开 keep-alive; 去掉 rdinit 二分残留。此前为 cfb82c7b。
+
 2026-11-21: firmware/ 刷机小件改为两件式 - 删除 01_gpt_bootarea(.img/_l10h/_l10g)，
 新增 gpt.img(32KiB, @0x0) 与 u-boot-basic.bin(9,378,304B, @0x40, basic 档 webflash 引导)。
 GPT 与固件分离，二者独立演进。配套 webflash installer FIT v2

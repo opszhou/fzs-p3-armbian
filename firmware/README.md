@@ -15,7 +15,7 @@
 | 文件 | 大小 | 写入地址 | 用途 |
 |---|---|---|---|
 | `gpt.img` | 32 KiB | `0x00000000`（LBA 0 起） | 仅 GPT（保护 MBR + 主 GPT 头与项），不再与固件合并打包 |
-| `u-boot-basic.bin` | 9,378,304 B | `0x00004000`（LBA 64 起） | **basic 档** U-Boot（webflash 刷机专用，三档方案的出厂默认引导） |
+| `u-boot-basic.bin` | 9,383,424 B | `0x00004000`（LBA 64 起） | **basic 档** U-Boot（webflash 刷机专用，三档方案的出厂默认引导） |
 
 配套 Releases：`02_boot.img` / `03_rootfs.img`（`@0x8000` / `@0xC8000`）不变。
 RKDevTool 两行即可：`gpt.img @0x0`、`u-boot-basic.bin @0x40`；boot/rootfs 两行照旧。
