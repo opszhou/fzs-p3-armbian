@@ -225,7 +225,7 @@ jobs:
           chmod 755 $I/init $I/bin/busybox
           # hard gate: /init and busybox must be executable (EACCES -13 otherwise)
           [ -x $I/bin/busybox ] && [ -x $I/init ] || { echo "initramfs perms BAD"; exit 1; }
-          echo "initramfs perms: init=$(stat -c%a $I/init) busybox=$(stat -c%a $I/bin/busybox)")
+          echo "initramfs perms: init=$(stat -c%a $I/init) busybox=$(stat -c%a $I/bin/busybox)"
           # force inode owner root:root to match the verified FIT (runner uid would be 1001)
           (cd $I && find . -print0 | cpio --null --owner=0:0 -o -H newc | gzip -9 > ${W}/initrd.gz)
 
@@ -285,13 +285,17 @@ jobs:
           sudo mkdir -p /mnt/slimchk && sudo mount -o ro ${LOOP}p1 /mnt/slimchk
           sudo ls /mnt/slimchk/extlinux/extlinux.conf /mnt/slimchk/Image /mnt/slimchk/uInitrd > /dev/null && echo "slim p1 OK"
           sudo umount /mnt/slimchk && sudo losetup -d ${LOOP}
-          gzip -k9 slim.raw && mv slim.raw.gz p3_armbian_slim.img.gz && rm slim.raw
+          gzip -k9 slim.raw && mv slim.raw.gz p3_armbian_slim.img.gz
+          # keep the UNCOMPRESSED full-disk image as the second deliverable format
+          mv slim.raw p3_armbian_full-${KERNEL_VER}.img
+          echo "full img: $(du -m p3_armbian_full-${KERNEL_VER}.img | cut -f1)MB"
 
           # ---- 校验清单 ----
-          sha256sum gpt.img u-boot-basic.bin p3boot 02_boot.img 03_rootfs.img p3_armbian_slim.img.gz > SHA256SUMS.txt
+          sha256sum gpt.img u-boot-basic.bin p3boot 02_boot.img 03_rootfs.img p3_armbian_slim.img.gz p3_armbian_full-${KERNEL_VER}.img > SHA256SUMS.txt
           [ -f FIT_SHA256.txt ] && cat FIT_SHA256.txt >> SHA256SUMS.txt || true
           cat SHA256SUMS.txt
-          echo "FIRMWARE_TAG=firmware_$(date +%Y.%m)" >> ${GITHUB_ENV}
+          # unique tag per build: kernel version + UTC timestamp, keeps history
+          echo "FIRMWARE_TAG=firmware_${KERNEL_VER}_$(date -u +%Y%m%d-%H%M)" >> ${GITHUB_ENV}
           echo "status=success" >> ${GITHUB_OUTPUT}
         id: pack
 
@@ -301,21 +305,30 @@ jobs:
         with:
           tag: ${{ env.FIRMWARE_TAG }}
           artifacts: build/output/*
-          allow_updates: true
+          allow_updates: false
           remove_artifacts: false
-          replaces_artifacts: true
-          make_latest: false
+          replaces_artifacts: false
+          make_latest: true
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           body: |
             ### P3 固件套件（CI 构建，内核 ${{ env.KERNEL_VER }}）
+
+            每次构建产出**两种完整系统镜像**，二选一刷入：
+
+            | 格式 | 文件 | 用途 |
+            |---|---|---|
+            | **FIT（webflash）** | `p3-installer-${{ env.FIT_VER }}.fit` | 网页上传安装：预配置 Armbian 26.11 noble；只写 boot/rootfs 分区 LBA32768+，**不动 U-Boot 引导区** |
+            | **整盘 img（直刷）** | `p3_armbian_full-${{ env.KERNEL_VER }}.img` | 未压缩完整盘：GPT+basic U-Boot+boot+rootfs，RKDevTool/dd 一次写 eMMC |
+            | 整盘 img 压缩版 | `p3_armbian_slim.img.gz` | 同上但 gzip 压缩，U 盘 Rufus/Etcher 写入 |
+
+            配套小件（分件刷机 / 引导）：
+
             | 文件 | 用途 |
             |---|---|
             | gpt.img / u-boot-basic.bin | 两件式引导：GPT `wl 0x0` + basic U-Boot（webflash 免刷新修复版）`wl 0x40` |
-            | 02_boot.img | boot 分区（内核 Image/uInitrd/dtb 出厂即对）`wl 0x8000` |
-            | 03_rootfs.img | rootfs 分区（首启自动扩容）`wl 0xC8000` |
-            | p3_armbian_slim.img.gz | U 盘整盘镜像（Rufus/Etcher 写入） |
+            | 02_boot.img / 03_rootfs.img | boot 分区 `wl 0x8000` / rootfs 分区 `wl 0xC8000` |
             | p3boot | U 盘 / eMMC 启动切换脚本 |
-            | p3-installer-${{ env.FIT_VER }}.fit | webflash installer FIT（预配置 Armbian 26.11 noble；只写 boot/rootfs 分区 LBA32768+，**不动 U-Boot 引导区**） |
-            - FIT 不含 U-Boot、写盘从 LBA32768 起：板上现有引导固件（pro/basic/任意版本）保持不变。webflash 免刷新需先自行刷入 `firmware/u-boot-basic.bin`（sha 41d45fec）或含修复的引导
-            - SHA256SUMS.txt 覆盖以上全部文件
-            - 刷机命令见仓库 `firmware/README.md`
+
+            - FIT 不含 U-Boot、写盘从 LBA32768 起：板上现有引导固件（pro/basic/任意版本）保持不变
+            - 整盘 img 含 basic U-Boot（免刷新修复版），适合空板/恢复出厂整盘直刷
+            - SHA256SUMS.txt 覆盖以上全部文件；刷机命令见仓库 `firmware/README.md`
