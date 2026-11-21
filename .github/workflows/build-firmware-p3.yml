@@ -192,7 +192,8 @@ jobs:
 
           # 4) installer initramfs (busybox + init with dynamic sha)
           I=${W}/inst; mkdir -p $I/bin $I/dev $I/proc $I/sys $I/tmp
-          cp busybox-arm64 $I/bin/busybox; ln -sf busybox $I/bin/sh; cp ${W}/system.img.xz $I/system.img.xz
+          cp busybox-arm64 $I/bin/busybox; chmod 755 $I/bin/busybox
+          ln -sf busybox $I/bin/sh; cp ${W}/system.img.xz $I/system.img.xz
           cat > $I/init <<INIT
           #!/bin/sh
           /bin/busybox mkdir -p /proc /sys /dev /tmp
@@ -221,8 +222,12 @@ jobs:
           wait \$P; cat /tmp/v.out
           grep -q \$DATA_SHA /tmp/v.out && { echo FLASH_OK; sync; sleep 3; reboot -f; } || { echo READBACK_MISMATCH; exec sh; }
           INIT
-          chmod +x $I/init
-          (cd $I && find . -print0 | cpio --null -o -H newc | gzip -9 > ${W}/initrd.gz)
+          chmod 755 $I/init $I/bin/busybox
+          # hard gate: /init and busybox must be executable (EACCES -13 otherwise)
+          [ -x $I/bin/busybox ] && [ -x $I/init ] || { echo "initramfs perms BAD"; exit 1; }
+          echo "initramfs perms: init=$(stat -c%a $I/init) busybox=$(stat -c%a $I/bin/busybox)")
+          # force inode owner root:root to match the verified FIT (runner uid would be 1001)
+          (cd $I && find . -print0 | cpio --null --owner=0:0 -o -H newc | gzip -9 > ${W}/initrd.gz)
 
           # 5) FIT via mkimage
           IMG_ABS="$(pwd)/Image"; DTB_ABS="$(pwd)/board.dtb"; RD_ABS="${W}/initrd.gz"
