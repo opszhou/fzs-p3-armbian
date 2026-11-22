@@ -1,0 +1,70 @@
+#!/bin/sh
+# P3 webflash installer init - GENERIC image loader (P3WFS1 format).
+# Template placeholders (__WFS_SHA__, __DISK_END__) are replaced by mkfit.sh.
+# Hard product rule: bootarea (LBA0-32767: GPT + U-Boot) is NEVER written.
+/bin/busybox mkdir -p /proc /sys /dev /tmp
+/bin/busybox mount -t proc none /proc
+/bin/busybox mount -t sysfs none /sys
+/bin/busybox mount -t devtmpfs none /dev 2>/dev/null
+export PATH=/bin
+
+F=/system.wfs
+EXPECT=__WFS_SHA__
+DISK_END=__DISK_END__
+BOOTAREA_END=32768
+
+echo
+echo "=== P3 webflash installer (generic P3WFS1 image) ==="
+echo "NOTE: bootarea (LBA0-$((BOOTAREA_END-1)): GPT + U-Boot) is NEVER written."
+
+# 1) upload integrity: sha of the whole .wfs file must match what mkfit embedded
+GOT=$(sha256sum $F | awk '{print $1}')
+[ "$GOT" = "$EXPECT" ] || { echo UPLOAD_SHA_MISMATCH; exec sh; }
+
+# 2) parse self-describing header (first 4096 bytes)
+H=$(head -c 4096 $F)
+MAGIC=$(echo "$H" | sed -n '1s/^\(P3WFS[0-9]*\)$/\1/p')
+[ "$MAGIC" = "P3WFS1" ] || { echo BAD_MAGIC:"$MAGIC"; exec sh; }
+START=$(echo "$H" | sed -n 's/^WRITE_LBA=//p')
+SECT=$(echo "$H" | sed -n 's/^IMAGE_SECTORS=//p')
+ISHA=$(echo "$H" | sed -n 's/^IMAGE_SHA256=//p')
+echo "$START" | grep -qE '^[0-9]+$' || { echo BAD_START; exec sh; }
+echo "$SECT"  | grep -qE '^[0-9]+$' || { echo BAD_SECTORS; exec sh; }
+echo "$ISHA"  | grep -qE '^[0-9a-f]{64}$' || { echo BAD_IMAGESHA; exec sh; }
+
+# 3) safety gates enforced by the installer, NOT trusted from the image:
+[ "$START" -ge "$BOOTAREA_END" ] || { echo REFUSE_WRITE_LBA_BELOW_32768; exec sh; }
+[ $((START+SECT)) -le "$DISK_END" ] || { echo REFUSE_IMAGE_EXCEEDS_DISK; exec sh; }
+
+TOTAL=$((SECT*512))
+echo "image: $SECT sectors -> LBA$START..$((START+SECT-1)), sha=$ISHA"
+echo "step 3/5: writing image at LBA$START - DO NOT POWER OFF"
+T0=$(date +%s)
+(tail -c +4097 $F | xzcat | dd of=/dev/mmcblk0 bs=512 seek=$START conv=fsync 2>/tmp/dd.err) & P=$!
+while kill -0 $P 2>/dev/null; do
+  sleep 5; EL=$(( $(date +%s) - T0 ))
+  W=$(grep write_bytes /proc/$P/io 2>/dev/null | head -n1 | awk '{print $2}')
+  if [ -n "$W" ] && [ "$W" -gt 0 ] 2>/dev/null; then
+    echo "  writing... ${EL}s  $(( W / 1048576 ))MB / $(( TOTAL / 1048576 ))MB ($(( W * 100 / TOTAL ))%)"
+  else
+    echo "  writing... ${EL}s"
+  fi
+done
+wait $P; RC=$?; cat /tmp/dd.err
+[ $RC -eq 0 ] || { echo WRITE_FAIL; exec sh; }
+
+# 4) readback verify: exactly SECT sectors, compared against the header-declared sha
+echo "step 4/5: readback verify $SECT sectors from LBA$START"
+T0=$(date +%s)
+(dd if=/dev/mmcblk0 bs=512 skip=$START count=$SECT 2>/dev/null | sha256sum >/tmp/v.out) & P=$!
+while kill -0 $P 2>/dev/null; do
+  sleep 5; EL=$(( $(date +%s) - T0 ))
+  R=$(grep rchar /proc/$P/io 2>/dev/null | head -n1 | awk '{print $2}')
+  if [ -n "$R" ] && [ "$R" -gt 0 ] 2>/dev/null; then
+    echo "  reading... ${EL}s  $(( R / 1048576 ))MB / $(( TOTAL / 1048576 ))MB ($(( R * 100 / TOTAL ))%)"
+  else
+    echo "  reading... ${EL}s"
+  fi
+done
+wait $P; cat /tmp/v.out
+grep -q $ISHA /tmp/v.out && { echo FLASH_OK; sync; sleep 3; reboot -f; } || { echo READBACK_MISMATCH; exec sh; }
