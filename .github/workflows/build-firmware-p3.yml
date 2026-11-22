@@ -206,15 +206,14 @@ jobs:
           FIT=../../build/output/p3-installer-${KERNEL_VER}.fit
           mkdir -p ../../build/output
           bash ../../tools/mkfit.sh ${W}/system.wfs ./Image ./board.dtb busybox-arm64 ${FIT} ${TOTAL} ./gptparse
-          # release delivers compressed packages only: FIT ships as .fit.xz
-          xz -T0 -9 ${FIT}
-          FITXZ=${FIT}.xz
-          FSHA=$(sha256sum ${FITXZ} | awk '{print $1}')
+          # FIT ships UNCOMPRESSED: its payload is already xz inside (outer compression
+          # would save ~2% only). Users download and upload it to webflash AS-IS.
+          FSHA=$(sha256sum ${FIT} | awk '{print $1}')
 
           # FIT embeds NO U-Boot; bootarea is preserved on the board.
           # basic U-Boot sha was gated at source above (BASIC_SHA) as the paired bootloader.
-          printf '%s  p3-installer-%s.fit.xz\n' "${FSHA}" "${KERNEL_VER}" > ../../build/output/FIT_SHA256.txt
-          echo "FIT built: ${FITXZ} + ${FIT}.gz, xz sha=${FSHA}"
+          printf '%s  p3-installer-%s.fit\n' "${FSHA}" "${KERNEL_VER}" > ../../build/output/FIT_SHA256.txt
+          echo "FIT built: ${FIT} sha=${FSHA}"
           echo "FIT_VER=${KERNEL_VER}" >> ${GITHUB_ENV}
           rm -rf ${W}
 
@@ -284,11 +283,9 @@ jobs:
           body: |
             ### P3 固件套件（CI 构建，内核 ${{ env.KERNEL_VER }}）
 
-            所有 fit / img 均以 **xz 压缩包**发布，刷机前先解压（`unxz`）：
-
             | 格式 | 文件 | 用途 |
             |---|---|---|
-            | **FIT（webflash）** | `p3-installer-${{ env.FIT_VER }}.fit.xz` | `unxz` 解压后网页上传安装：预配置 Armbian 26.11 noble |
+            | **FIT（webflash）** | `p3-installer-${{ env.FIT_VER }}.fit` | **下载后直接网页上传，无需解压**（FIT 内部数据已是 xz）：预配置 Armbian 26.11 noble |
             | **整盘 img（直刷）** | `p3_armbian_full-${{ env.KERNEL_VER }}.img.xz` | 完整盘压缩包：GPT+basic U-Boot+boot+rootfs；Rufus/Etcher 可直接写 `.img.xz`，`dd` 前先 `unxz` |
 
             配套小件（分件刷机 / 引导）：
