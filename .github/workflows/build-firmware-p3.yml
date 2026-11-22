@@ -113,7 +113,7 @@ jobs:
           rmdir ${M}
           echo "injection done"
 
-      - name: Build webflash installer FIT (partitions only, bootarea preserved)
+      - name: Build webflash FIT (generic P3WFS1 flow, bootarea preserved)
         run: |
           set -e
           sudo apt-get update -qq
@@ -190,84 +190,17 @@ jobs:
           DATA_SHA=$(sha256sum ${W}/data.img | awk '{print $1}')
           echo "data.img sha=${DATA_SHA} sectors=${DATA_SECT} (maps to disk LBA ${DATA_START}..$((TOTAL-1)))"
 
-          # 3) xz compress
-          xz -T0 -9 -c ${W}/data.img > ${W}/system.img.xz
-          XZSHA=$(sha256sum ${W}/system.img.xz | awk '{print $1}')
+          # 4) pack as a generic self-describing webflash image (P3WFS1) and build the FIT.
+          #    Same tools are published in tools/ so ANYONE can pack and flash their own
+          #    image: mkwebflash.sh -> p3wfs-check.sh -> mkfit.sh. The on-board installer
+          #    parses the image header and enforces LBA>=32768 (bootarea protection) itself.
+          chmod +x ../../tools/mkwebflash.sh ../../tools/p3wfs-check.sh ../../tools/mkfit.sh
+          bash ../../tools/mkwebflash.sh ${W}/data.img ${W}/system.wfs 32768
+          bash ../../tools/p3wfs-check.sh ${W}/system.wfs ${TOTAL}
 
-          # 4) installer initramfs (busybox + init with dynamic sha)
-          I=${W}/inst; mkdir -p $I/bin $I/dev $I/proc $I/sys $I/tmp
-          cp busybox-arm64 $I/bin/busybox; chmod 755 $I/bin/busybox
-          ln -sf busybox $I/bin/sh; cp ${W}/system.img.xz $I/system.img.xz
-          cat > $I/init <<INIT
-          #!/bin/sh
-          /bin/busybox mkdir -p /proc /sys /dev /tmp
-          /bin/busybox mount -t proc none /proc
-          /bin/busybox mount -t sysfs none /sys
-          /bin/busybox mount -t devtmpfs none /dev 2>/dev/null
-          export PATH=/bin
-          F=/system.img.xz
-          EXPECT=${XZSHA}
-          DATA_SHA=${DATA_SHA}
-          DATA_START=${DATA_START}
-          DATA_SECT=${DATA_SECT}
-          echo
-          echo "=== P3 webflash installer (kernel ${KERNEL_VER}, Armbian 26.11 noble) ==="
-          echo "NOTE: bootarea (LBA0-32767: GPT + U-Boot) is PRESERVED, never written."
-          GOT=\$(sha256sum \$F | awk '{print \$1}')
-          [ "\$GOT" = "\$EXPECT" ] || { echo SHA_MISMATCH; exec sh; }
-          echo "step 3/5: writing partitions at LBA\$DATA_START (boot+rootfs) - DO NOT POWER OFF"
-          TOTAL=\$((DATA_SECT * 512))
-          T0=\$(date +%s)
-          (xzcat \$F | dd of=/dev/mmcblk0 bs=512 seek=\$DATA_START conv=fsync 2>/tmp/dd.err) & P=\$!
-          while kill -0 \$P 2>/dev/null; do
-            sleep 5; EL=\$(( \$(date +%s) - T0 ))
-            W=\$(grep write_bytes /proc/\$P/io 2>/dev/null | head -n1 | awk '{print \$2}')
-            if [ -n "\$W" ] && [ "\$W" -gt 0 ] 2>/dev/null; then
-              echo "  writing... \${EL}s  \$(( W / 1048576 ))MB / \$(( TOTAL / 1048576 ))MB (\$(( W * 100 / TOTAL ))%)"
-            else
-              echo "  writing... \${EL}s"
-            fi
-          done
-          wait \$P; RC=\$?; cat /tmp/dd.err
-          [ \$RC -eq 0 ] || { echo WRITE_FAIL; exec sh; }
-          echo "step 4/5: readback verify \$DATA_SECT sectors from LBA\$DATA_START"
-          T0=\$(date +%s)
-          (dd if=/dev/mmcblk0 bs=512 skip=\$DATA_START count=\$DATA_SECT 2>/dev/null | sha256sum >/tmp/v.out) & P=\$!
-          while kill -0 \$P 2>/dev/null; do
-            sleep 5; EL=\$(( \$(date +%s) - T0 ))
-            R=\$(grep rchar /proc/\$P/io 2>/dev/null | head -n1 | awk '{print \$2}')
-            if [ -n "\$R" ] && [ "\$R" -gt 0 ] 2>/dev/null; then
-              echo "  reading... \${EL}s  \$(( R / 1048576 ))MB / \$(( TOTAL / 1048576 ))MB (\$(( R * 100 / TOTAL ))%)"
-            else
-              echo "  reading... \${EL}s"
-            fi
-          done
-          wait \$P; cat /tmp/v.out
-          grep -q \$DATA_SHA /tmp/v.out && { echo FLASH_OK; sync; sleep 3; reboot -f; } || { echo READBACK_MISMATCH; exec sh; }
-          INIT
-          chmod 755 $I/init $I/bin/busybox
-          # hard gate: /init and busybox must be executable (EACCES -13 otherwise)
-          [ -x $I/bin/busybox ] && [ -x $I/init ] || { echo "initramfs perms BAD"; exit 1; }
-          echo "initramfs perms: init=$(stat -c%a $I/init) busybox=$(stat -c%a $I/bin/busybox)"
-          # force inode owner root:root to match the verified FIT (runner uid would be 1001)
-          (cd $I && find . -print0 | cpio --null --owner=0:0 -o -H newc | gzip -9 > ${W}/initrd.gz)
-
-          # 5) FIT via mkimage
-          IMG_ABS="$(pwd)/Image"; DTB_ABS="$(pwd)/board.dtb"; RD_ABS="${W}/initrd.gz"
-          cat > ${W}/i.its <<ITS
-          /dts-v1/;
-          / { description="P3 webflash installer ${KERNEL_VER}"; #address-cells=<1>;
-            images {
-              k { description="kernel"; data = /incbin/("${IMG_ABS}"); type="kernel"; arch="arm64"; os="linux"; compression="none"; load=<0x20000000>; entry=<0x20000000>; h { algo="sha256"; }; };
-              r { description="initramfs"; data = /incbin/("${RD_ABS}"); type="ramdisk"; arch="arm64"; os="linux"; compression="none"; load=<0x24000000>; h { algo="sha256"; }; };
-              f { description="dtb"; data = /incbin/("${DTB_ABS}"); type="flat_dt"; arch="arm64"; compression="none"; load=<0x40000000>; h { algo="sha256"; }; };
-            };
-            configurations { default="c"; c { kernel="k"; ramdisk="r"; fdt="f"; }; };
-          };
-          ITS
           FIT=../../build/output/p3-installer-${KERNEL_VER}.fit
           mkdir -p ../../build/output
-          mkimage -f ${W}/i.its ${FIT}
+          bash ../../tools/mkfit.sh ${W}/system.wfs ./Image ./board.dtb busybox-arm64 ${FIT} ${TOTAL}
           # release delivers compressed packages only: FIT ships as .fit.gz
           gzip -9 ${FIT}
           FITGZ=${FIT}.gz
@@ -357,3 +290,11 @@ jobs:
             - FIT 不含 U-Boot、写盘从 LBA32768 起：板上现有引导固件（pro/basic/任意版本）保持不变
             - 整盘 img 含 basic U-Boot（免刷新修复版），适合空板/恢复出厂整盘直刷
             - SHA256SUMS.txt 覆盖以上全部文件；刷机命令见仓库 `firmware/README.md`
+
+            ### 第三方镜像通用刷机（P3WFS1 规范）
+
+            只要板上刷过我们的 U-Boot，任何人打包的镜像都可网页刷入。仓库 `tools/` 提供
+            全套脚本：`mkwebflash.sh`（打包）→ `p3wfs-check.sh`（自检）→ `mkfit.sh`（出 FIT）。
+            镜像格式：`P3WFS1` = 4096B 明文头部（WRITE_LBA / IMAGE_SECTORS / IMAGE_SHA256）
+            + xz 数据流。installer 自行校验：写盘起点必须 ≥ LBA32768（保护引导区）、
+            不得超出盘尾、回读 sha 必须等于头部声明——不合规的包直接拒绝刷入。
