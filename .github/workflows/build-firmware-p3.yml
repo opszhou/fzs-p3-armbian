@@ -194,13 +194,18 @@ jobs:
           #    Same tools are published in tools/ so ANYONE can pack and flash their own
           #    image: mkwebflash.sh -> p3wfs-check.sh -> mkfit.sh. The on-board installer
           #    parses the image header and enforces LBA>=32768 (bootarea protection) itself.
+          #    Whole-disk third-party images (xz/gzip/raw GPT) are also supported at
+          #    flash time: gptparse locates boot/rootfs inside the image; the installer
+          #    writes ONLY the board's fixed partitions (boot@32768, rootfs@819200).
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu >/dev/null
+          aarch64-linux-gnu-gcc -static -O2 -s -o ./gptparse ../../tools/gptparse.c
           chmod +x ../../tools/mkwebflash.sh ../../tools/p3wfs-check.sh ../../tools/mkfit.sh
           bash ../../tools/mkwebflash.sh ${W}/data.img ${W}/system.wfs 32768
           bash ../../tools/p3wfs-check.sh ${W}/system.wfs ${TOTAL}
 
           FIT=../../build/output/p3-installer-${KERNEL_VER}.fit
           mkdir -p ../../build/output
-          bash ../../tools/mkfit.sh ${W}/system.wfs ./Image ./board.dtb busybox-arm64 ${FIT} ${TOTAL}
+          bash ../../tools/mkfit.sh ${W}/system.wfs ./Image ./board.dtb busybox-arm64 ${FIT} ${TOTAL} ./gptparse
           # release delivers compressed packages only: FIT ships as .fit.gz
           gzip -9 ${FIT}
           FITGZ=${FIT}.gz

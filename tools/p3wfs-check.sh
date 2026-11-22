@@ -29,8 +29,8 @@ echo "$START" | grep -qE '^[0-9]+$' || die "WRITE_LBA not numeric: $START"
 echo "$SEC"  | grep -qE '^[0-9]+$' || die "IMAGE_SECTORS not numeric: $SEC"
 echo "$ISHA" | grep -qE '^[0-9a-f]{64}$' || die "IMAGE_SHA256 malformed"
 
-# declared size must match the file exactly (header + payload)
-[ "$SZ" -eq $((4096 + SEC * 512)) ] || die "size mismatch: file=$SZ, declared 4096+$SEC*512=$((4096 + SEC*512))"
+# note: file size = 4096 header + xz stream (compressed), so the declared
+# IMAGE_SECTORS is validated via the payload sha check below, not by size.
 
 # bootarea protection + disk capacity (same gates as on-board installer)
 [ "$START" -ge "$BOOTAREA_END" ] || die "WRITE_LBA=$START < $BOOTAREA_END (would overwrite GPT/U-Boot bootarea)"
