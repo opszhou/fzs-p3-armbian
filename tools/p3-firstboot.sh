@@ -130,6 +130,7 @@ fi
 # machine that cannot boot, so locate it first and skip everything if it is
 # not there: not renaming is always safer than booting into a stale cmdline.
 PROBE_MNT=/run/p3-firstboot-probe
+BOOT_OFFLINE=0
 if { [ -z "${P3_MARK:-}" ] || [ "${P3_ALLOW_PROBE:-0}" = 1 ]; } &&
    [ ! -f "${EXT}" ] && [ -z "${P3_BOOT_DEV:-}" ]; then
     for _d in $(lsblk -rno NAME,TYPE 2>/dev/null | awk '$2=="part"{print "/dev/"$1}'); do
@@ -146,6 +147,7 @@ if { [ -z "${P3_MARK:-}" ] || [ "${P3_ALLOW_PROBE:-0}" = 1 ]; } &&
             env="${PROBE_MNT}/armbianEnv.txt"
             BOOT_DEV="${_d}"
             mount -o remount,rw "${PROBE_MNT}" 2>/dev/null || true
+            BOOT_OFFLINE=1   # we own this mount: rename it after unmounting
             log "boot config found on ${_d} (that partition is not mounted at /boot)"
             break
         fi
@@ -161,7 +163,14 @@ fi
 
 WANT_BOOT=0
 if [ "${BOOT_DEV}" != "${ROOT_DEV}" ]; then
-    if ! check_ext "${BOOT_DEV}" boot; then
+    if [ "${BOOT_OFFLINE}" = 1 ]; then
+        # Mounted by us, renamed after unmounting: no metadata_csum_seed needed,
+        # so an ext2 boot partition works too.
+        case "$(blkid -s TYPE -o value "${BOOT_DEV}" 2>/dev/null)" in
+            ext2|ext3|ext4) ;;
+            *) log "boot fs ${BOOT_DEV} is not ext; uuid change skipped"; : >"${MARK}"; exit 0 ;;
+        esac
+    elif ! check_ext "${BOOT_DEV}" boot; then
         log "boot fs cannot be renamed; a new root uuid with the old cmdline would not boot, skipped"
         : >"${MARK}"
         exit 0
@@ -216,6 +225,10 @@ if [ "${fstab_had_root}" = 1 ] && ! grep -q "UUID=${NEW_ROOT_UUID}" "${FSTAB}"; 
 fi
 
 if [ "${WANT_BOOT}" = 1 ]; then
+    if [ "${BOOT_OFFLINE}" = 1 ]; then
+        sync
+        umount "${PROBE_MNT}" 2>/dev/null || true
+    fi
     if ! tune2fs -U "${NEW_BOOT_UUID}" "${BOOT_DEV}" 2>>"${LOG}"; then
         rollback "boot tune2fs failed"
         : >"${MARK}"
