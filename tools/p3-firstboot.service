@@ -1,0 +1,15 @@
+[Unit]
+Description=P3 first boot: default login, unique filesystem UUIDs
+Documentation=file:/usr/lib/p3/p3-firstboot.sh
+ConditionPathExists=!/etc/p3-firstboot.done
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /usr/lib/p3/p3-firstboot.sh
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

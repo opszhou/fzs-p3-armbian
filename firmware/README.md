@@ -1,132 +1,68 @@
-# firmware — PC 刷机包（与 bootloader/ 分开）
+# firmware/ — 发布件源（小件入 git，大件走 Release）
 
-这里放**给 PC 侧使用的刷机包**；引导固件本体的说明在
-[../bootloader/](../bootloader/)。
-
-两套刷机包并行可用，二选一：
-
-- **v2 套件**（L9 引导链，2026-11-12 真机验收启动）
-- **L10 双模式套件**（ophub 系引导链，2026-11-17 真机验证）
-
-历史版本（L8 刷机套件、v1.0 原始镜像备份）保留在旧仓库的 git 标签 `archive-l8`。
-
-## 刷机包文件（basic 两件式，2026-11-21 起默认）
+这里放**构成发布包的源文件**。`02_boot.img` / `03_rootfs.img` / 整盘 img 体积大，不入 git，
+由 CI 按 `firmware_<内核>_<时间>` 发布；git 里只保留下面这些小件。
 
 | 文件 | 大小 | 写入地址 | 用途 |
 |---|---|---|---|
-| `gpt.img` | 32 KiB | `0x00000000`（LBA 0 起） | 仅 GPT（保护 MBR + 主 GPT 头与项），不再与固件合并打包 |
-| `u-boot-basic.bin` | 9,383,424 B | `0x00004000`（LBA 64 起） | **basic 档** U-Boot（webflash 刷机专用，三档方案的出厂默认引导） |
+| `gpt.img` | 32 KiB | `0x0`（LBA 0） | 保护 MBR + 主 GPT（头 + 分区项），不含固件 |
+| `u-boot-basic.bin` | 9.0 MiB | `0x40`（LBA 64） | basic 档 U-Boot（eMMC 引导 + 网页刷机），版本见 `u-boot-basic.version` |
+| `04_backup_gpt.img` | 16,896 B | 盘尾（`0x01D1EFDF`） | 备份 GPT，可选；主 GPT 有效时不会被读 |
+| `u-boot-basic.version` | — | — | 发布版号，CI 会与二进制内嵌版本双向校验 |
+| `SHA256SUMS.txt` | — | — | 上面三个镜像的 sha256；同时是 CI 的引导件门禁 |
 
-配套 Releases：`02_boot.img` / `03_rootfs.img`（`@0x8000` / `@0xC8000`）不变。
-RKDevTool 两行即可：`gpt.img @0x0`、`u-boot-basic.bin @0x40`；boot/rootfs 两行照旧。
-旧 `01_gpt_bootarea*.img`（GPT 与固件合并）自本日起退役：固件区与分区表分离后，
-更新固件不再触碰 GPT，更新分区表不再触碰固件，二者独立演进。
+GPT 与固件分离的好处：换 U-Boot 不碰分区表，改分区表不碰 U-Boot。
+MASKROM 救砖 Loader 在 [../bootloader/](../bootloader/)。
 
-## 刷机包文件（v2 / L9 引导链）
+## 三条刷写路径
 
-| 文件 | 大小 | 写入地址 | 用途 |
-|---|---|---|---|
-| `01_gpt_bootarea.img` | 9,437,696 B | `0x00000000`（LBA 0 起） | LBA0..18432：保护 MBR + 主 GPT(头+项) + idbloader + U-Boot(L9) + 扩容后的 bootarea |
-| `02_boot.img` | 402,653,184 B | `0x00008000` | BOOT 分区（384 MiB）整分区镜像：内核 + initrd + **修复版 DTB**（RGMII 延迟 / SCMI 时钟 / PWM pinctrl / sdmmc0） |
-| `03_rootfs.img` | 3,144,679,424 B | `0x000C8000` | rootfs 分区内容（首次启动自动扩容）；**仅整盘重刷时使用**，v2 相对板上现有系统未动 rootfs |
-| `04_backup_gpt.img` | 16,896 B | `0x01D1EFDF` | 盘尾备份 GPT（可选；主 GPT 有效时根本不会被读） |
-| `SHA256SUMS.txt` | — | — | sha256（含写入地址注释），写后读回比对用 |
+### 1. 网页刷机（推荐，无需装任何 PC 工具）
 
-> **体积原因**：`02_boot.img`（402 MB）、`03_rootfs.img`（3.1 GB）与整盘一体包
-> `p3_armbian_v2_full.img.gz`（1.16 GiB）不入 git，在 **Releases** 下载。
-> git 里只保留小件（01、04、校验和、文档）。
+板子进入救援页（上电窗口按 `r`，或 U-Boot 下 `recovery`）→ 上传 `.fit` 或整盘镜像 →
+板上自行解析分区、分段写盘、回读校验 → `FLASH_OK` 后重启。
 
-### 刷机（RKDevTool，2 行配置）
+写入范围固定为 boot（LBA 32768）与 rootfs（LBA 819200），引导区不参与，因此
+**换系统不会把 U-Boot 刷坏**。
 
-进入刷机模式（串口上电窗口按 `r`，或 `=>` 下敲 `recovery` / `rockusb 0 mmc 0`，
-RKDevTool 显示**发现 LOADER 设备**），Download Image 页勾选**强制按地址写**：
+### 2. 整盘镜像（Rufus / Etcher / dd）
 
-| 勾选 | 地址 | 文件 |
+`p3_armbian_full-<内核>.img.xz` 可直接写盘（Rufus、Etcher、`dd` 都认 xz）。
+写 U 盘后从 U 盘引导需要 plus / pro 档 U-Boot；basic 档没有 USB host 栈。
+
+### 3. 分件写入（RKDevTool / upgrade_tool，产线与救砖）
+
+| 行 | 地址 | 文件 |
 |---|---|---|
-| [x] | `0x00000000` | `01_gpt_bootarea.img` |
-| [x] | `0x00008000` | `02_boot.img` |
-| [ ] | `0x01D1EFDF` | `04_backup_gpt.img`（备份 GPT，可选） |
-
-rootfs 未损坏时**只刷前两行**。命令行等价：
-
-```bat
-upgrade_tool.exe wl 0x0 01_gpt_bootarea.img
-upgrade_tool.exe wl 0x8000 02_boot.img
-```
-
-### 写后校验（防假成功，必须做）
-
-`wl` 报 100% ≠ 写入落地。读回比对 sha256，一致才断电重启：
+| 1 | `0x00000000` | `gpt.img` |
+| 2 | `0x00004000` | `u-boot-basic.bin` |
+| 3 | `0x00008000` | `02_boot.img` |
+| 4 | `0x000C8000` | `03_rootfs.img` |
 
 ```bat
-upgrade_tool.exe rl 0 18432 dev_readback1.bin
-upgrade_tool.exe rl 32768 786432 dev_readback2.bin
-certutil -hashfile dev_readback1.bin SHA256   :: 应等于 01_gpt_bootarea.img 的 sha256
-certutil -hashfile dev_readback2.bin SHA256   :: 应等于 02_boot.img 的 sha256
+upgrade_tool.exe wl 0x0      gpt.img
+upgrade_tool.exe wl 0x40     u-boot-basic.bin
+upgrade_tool.exe wl 0x8000   02_boot.img
+upgrade_tool.exe wl 0xC8000  03_rootfs.img
 ```
 
-`dev_readback*.bin` 是一次性校验临时文件，比对完即删。详细流程见 `CHANGELOG.txt`。
+RKDevTool 里勾「强制按地址写」，Loader 行不要勾（已在刷机模式的板子不需要重下 Loader）。
+只想换引导时只写前两行；只想换系统时只写后两行。
 
-## 刷机包文件（L10 双模式套件）
+## 写后校验（必须做）
 
-| 文件 | 大小 | 写入地址 | 用途 |
-|---|---|---|---|
-| `01_gpt_bootarea_l10h.img` | 9,437,696 B | `0x00000000` | 分区表 + 引导段内嵌 **L10-H**（日常用，可 U 盘启动） |
-| `01_gpt_bootarea_l10g.img` | 9,437,696 B | `0x00000000` | 分区表 + 引导段内嵌 **L10-G**（要 rockusb 反复刷机用） |
-| `02_boot.img`（L10 版） | 402,653,184 B | `0x00008000` | BOOT 分区整镜像：6.12.81-rk35xx-flippy 内核（MPP 硬解全开）+ **RGMII 魔数已修 dtb**（tx=0x22 / rx=0x15） |
-| `03_rootfs.img`（L10 版） | 1,180,696,576 B | `0x000C8000` | rootfs（首次启动自动扩容），配套 6.12.81-ophub 补丁内核模块；网络自愈由内核开机自检接管（dtbfix 已退役） |
-| `p3_armbian_slim.img` | 1,678,770,176 B | — | U 盘整盘镜像（Rufus / Etcher 写 U 盘做 U 盘系统）；rootfs 分区首启自动扩满整盘 |
-| `p3boot` | 1,521 B | — | U 盘 / eMMC 启动目标切换脚本（`p3boot usb` / `emmc` / `clear` / `status`，跑在盒子 U-Boot 环境里） |
-| `04_backup_gpt.img` | 16,896 B | `0x01D1EFDF` | 与 v2 共用同一份盘尾备份 GPT |
-
-> **体积原因**：L10 版 `02_boot.img`（402 MB）、`03_rootfs.img`（1.10 GB）与
-> `p3_armbian_slim.img`（1.56 GB）不入 git，在 **Releases**（tag `flashkit_l10`）下载。
-> git 里只保留小件。
-
-### 01 两个版本的区别（二选一）
-
-分区表部分完全相同，区别只在引导段（`0x40` 起）内嵌 L10-H 还是 L10-G：
-
-| 刷完想怎么用 | 用哪个 |
-|---|---|
-| 日常使用、以后可能从 U 盘启动 / 双系统 | `01_gpt_bootarea_l10h.img`（默认） |
-| 以后还要经常用电脑 rockusb 刷机 | `01_gpt_bootarea_l10g.img` |
-
-选好 01 后一般无需再单独刷引导；单独刷 `u-boot-L10-*.bin` 也不会动分区表
-（详见 [../bootloader/](../bootloader/)）。
-
-### 刷机（upgrade_tool，3 行配置）
-
-进入刷机模式：G 模式下盒子接 USB 到电脑，串口 3 秒内按 `r` 看到
-`Entering rockusb loader`，`upgrade_tool.exe ld` 出现 `... Loader` 即就绪：
+`wl` 报 100% 不等于写进去了。读回比对，一致才断电：
 
 ```bat
-upgrade_tool.exe db  ..\bootloader\MiniLoaderAll_p3_l1.bin
-upgrade_tool.exe wl  0x0      01_gpt_bootarea_l10h.img   :: 要 rockusb 反复刷机换 _l10g
-upgrade_tool.exe wl  0x8000   02_boot.img
-upgrade_tool.exe wl  0xC8000  03_rootfs.img
+upgrade_tool.exe rl 0      64     rb_gpt_uboot.bin
+upgrade_tool.exe rl 32768  786432 rb_boot.bin
+certutil -hashfile rb_gpt_uboot.bin SHA256
+certutil -hashfile rb_boot.bin     SHA256
 ```
 
-- 顺序不能乱：`0x0 → 0x8000 → 0xC8000`；只刷引导和内核时刷前两行即可。
-- 03_rootfs.img 1.10 GB，读回校验约 1 分钟。
+与 `SHA256SUMS.txt` 对应行一致才上电；不一致就留在刷机模式重写。
 
-### 写后校验
+## 铁律
 
-读回比对 sha256，一致才断电重启（读回长度 = 镜像字节数 / 512 个扇区）：
-
-```bat
-upgrade_tool.exe rl 0      18433 dev_readback1.bin
-upgrade_tool.exe rl 32768  786432 dev_readback2.bin
-upgrade_tool.exe rl 819200 2306048 dev_readback3.bin
-certutil -hashfile dev_readback1.bin SHA256   :: 应等于 01_gpt_bootarea_l10h.img 的 sha256
-certutil -hashfile dev_readback2.bin SHA256   :: 应等于 02_boot.img（L10）的 sha256
-certutil -hashfile dev_readback3.bin SHA256   :: 应等于 03_rootfs.img（L10）的 sha256
-```
-
-### 铁律
-
-- 写入过程绝对不能断电；刷完断电 ≥10 s 再上电（不是 reset）
-- 写物理盘前核对盘号与 15,634,268,160 B 容量；Windows 提示格式化一律拒绝
-- 校验不一致就留在刷机模式重写，不要上电
-
----
+- 写入过程不能断电；写完后断电 ≥10 s 再上电（不是 reset）
+- 写物理盘前核对盘号与容量（16 GB eMMC ≈ 15,634,268,160 B）；Windows 弹格式化一律拒绝
+- 校验不一致不带病启动
