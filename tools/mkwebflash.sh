@@ -52,7 +52,7 @@ dd if="$IN" bs=512 skip="$PS" count="$PSEC" 2>/dev/null | xz -T0 -9 -c >> "$OUT.
 
 mv "$OUT.tmp" "$OUT"
 NEWSZ=$(stat -c%s "$OUT")
-[ "$NEWSZ" -eq $((4096 + PSEC * 512)) ] || { echo "INTERNAL ERROR: wfs size $NEWSZ != 4096+$PSEC*512"; exit 1; }
+[ "$NEWSZ" -gt 4096 ] || { echo "INTERNAL ERROR: wfs too small"; exit 1; }
 
 echo "built $OUT ($(( NEWSZ / 1048576 ))MB compressed)"
 echo "  payload: $PSEC sectors -> WRITE_LBA$((PS==0 ? LBA : 32768))"
