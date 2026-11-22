@@ -181,6 +181,10 @@ jobs:
           # + extlinux), rootfs @relative (ROOTFS_LBA-DATA_START). Neither touches bootarea.
           dd if=../../build/base/02_boot.img of=${W}/data.img bs=512 seek=0 conv=notrunc status=none
           dd if=${W}/rootfs.img of=${W}/data.img bs=512 seek=$((ROOTFS_LBA-DATA_START)) conv=notrunc status=none
+          # rootfs base image carries a 33-sector tail (disk-end GPT copy from when it
+          # was sliced off the full image). Clamp data.img to exactly DATA_SECT so the
+          # written size == readback size, and the board's disk-end GPT stays untouched.
+          truncate -s $((DATA_SECT*SEC)) ${W}/data.img
           # build a standalone GPT for the data segment? NO - we keep the board's GPT.
           # data.img is a raw partition-content blob; installer writes it at LBA32768.
           DATA_SHA=$(sha256sum ${W}/data.img | awk '{print $1}')
