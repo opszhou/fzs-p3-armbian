@@ -255,9 +255,10 @@ jobs:
           echo "full img.xz: $(du -m p3_armbian_full-${KERNEL_VER}.img.xz | cut -f1)MB"
 
           # ---- bootarea package: GPT + basic U-Boot as one 16MB block (MaskRom wl 0x0) ----
-          truncate -s $((32768 * 512)) ${OUT}/bootarea-basic.img
-          dd if=firmware/gpt.img          of=${OUT}/bootarea-basic.img bs=512 seek=0  conv=notrunc status=none
-          dd if=firmware/u-boot-basic.bin of=${OUT}/bootarea-basic.img bs=512 seek=64 conv=notrunc status=none
+          # (already cd'd into ${OUT}; gpt.img / u-boot-basic.bin were copied here above)
+          truncate -s $((32768 * 512)) bootarea-basic.img
+          dd if=gpt.img          of=bootarea-basic.img bs=512 seek=0  conv=notrunc status=none
+          dd if=u-boot-basic.bin of=bootarea-basic.img bs=512 seek=64 conv=notrunc status=none
           echo "bootarea-basic.img: GPT@LBA0 + basic U-Boot@LBA64 (16MB, MaskRom one-shot wl 0x0)"
 
           # ---- 校验清单 ----
