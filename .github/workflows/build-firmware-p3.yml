@@ -254,8 +254,14 @@ jobs:
           gzip -k9 slim.raw && mv slim.raw.gz p3_armbian_full-${KERNEL_VER}.img.gz && rm slim.raw
           echo "full img.gz: $(du -m p3_armbian_full-${KERNEL_VER}.img.gz | cut -f1)MB"
 
+          # ---- bootarea package: GPT + basic U-Boot as one 16MB block (MaskRom wl 0x0) ----
+          truncate -s $((32768 * 512)) ${OUT}/bootarea-basic.img
+          dd if=firmware/gpt.img          of=${OUT}/bootarea-basic.img bs=512 seek=0  conv=notrunc status=none
+          dd if=firmware/u-boot-basic.bin of=${OUT}/bootarea-basic.img bs=512 seek=64 conv=notrunc status=none
+          echo "bootarea-basic.img: GPT@LBA0 + basic U-Boot@LBA64 (16MB, MaskRom one-shot wl 0x0)"
+
           # ---- 校验清单 ----
-          sha256sum gpt.img u-boot-basic.bin p3boot 02_boot.img 03_rootfs.img p3_armbian_full-${KERNEL_VER}.img.gz > SHA256SUMS.txt
+          sha256sum gpt.img u-boot-basic.bin p3boot 02_boot.img 03_rootfs.img bootarea-basic.img p3_armbian_full-${KERNEL_VER}.img.gz > SHA256SUMS.txt
           [ -f FIT_SHA256.txt ] && cat FIT_SHA256.txt >> SHA256SUMS.txt || true
           cat SHA256SUMS.txt
           # unique tag per build: kernel version + UTC timestamp, keeps history
@@ -281,25 +287,33 @@ jobs:
 
             | 格式 | 文件 | 用途 |
             |---|---|---|
-            | **FIT（webflash）** | `p3-installer-${{ env.FIT_VER }}.fit.gz` | `gunzip` 解压后网页上传安装：预配置 Armbian 26.11 noble；只写 boot/rootfs 分区 LBA32768+，**不动 U-Boot 引导区** |
+            | **FIT（webflash）** | `p3-installer-${{ env.FIT_VER }}.fit.gz` | `gunzip` 解压后网页上传安装：预配置 Armbian 26.11 noble |
             | **整盘 img（直刷）** | `p3_armbian_full-${{ env.KERNEL_VER }}.img.gz` | 完整盘压缩包：GPT+basic U-Boot+boot+rootfs；Rufus/Etcher 可直接写 `.gz`，`dd` 前先 `gunzip` |
 
             配套小件（分件刷机 / 引导）：
 
             | 文件 | 用途 |
             |---|---|
-            | gpt.img / u-boot-basic.bin | 两件式引导：GPT `wl 0x0` + basic U-Boot（webflash 免刷新修复版）`wl 0x40` |
+            | bootarea-basic.img | 引导区整包（GPT @LBA0 + basic U-Boot @LBA64，16MB）：MaskRom `wl 0x0` 一次写入 |
+            | gpt.img / u-boot-basic.bin | 两件式引导（与上等价，分两次写）：GPT `wl 0x0` + U-Boot `wl 0x40` |
             | 02_boot.img / 03_rootfs.img | boot 分区 `wl 0x8000` / rootfs 分区 `wl 0xC8000` |
             | p3boot | U 盘 / eMMC 启动切换脚本 |
 
-            - FIT 不含 U-Boot、写盘从 LBA32768 起：板上现有引导固件（pro/basic/任意版本）保持不变
-            - 整盘 img 含 basic U-Boot（免刷新修复版），适合空板/恢复出厂整盘直刷
             - SHA256SUMS.txt 覆盖以上全部文件；刷机命令见仓库 `firmware/README.md`
 
-            ### 第三方镜像通用刷机（P3WFS1 规范）
+            ### 刷写方式说明
 
-            只要板上刷过我们的 U-Boot，任何人打包的镜像都可网页刷入。仓库 `tools/` 提供
-            全套脚本：`mkwebflash.sh`（打包）→ `p3wfs-check.sh`（自检）→ `mkfit.sh`（出 FIT）。
-            镜像格式：`P3WFS1` = 4096B 明文头部（WRITE_LBA / IMAGE_SECTORS / IMAGE_SHA256）
-            + xz 数据流。installer 自行校验：写盘起点必须 ≥ LBA32768（保护引导区）、
-            不得超出盘尾、回读 sha 必须等于头部声明——不合规的包直接拒绝刷入。
+            本套件所有刷写路径只写入两个固定分区：boot（LBA32768 起）与
+            rootfs（LBA819200 起）。LBA0-32767（GPT + U-Boot 引导区）与盘尾
+            备份 GPT 不会被写入；写盘完成后逐段回读做 sha256 校验，不一致则
+            停止并保留现场，不会带病重启。
+
+            两种镜像形态：
+
+            | 形态 | 打包 | 写盘行为 |
+            |---|---|---|
+            | P3WFS1（`.wfs`） | `tools/mkwebflash.sh` 打包，`p3wfs-check.sh` 自检，`mkfit.sh` 出 FIT | 头部声明写盘起点与内容 sha；installer 强制起点 ≥ LBA32768、不越盘尾，回读 sha 与头部声明比对 |
+            | 自带 GPT 的整盘镜像（`.img` / `.img.xz` / `.img.gz`） | 无需预处理，`tools/mkfit.sh` 直接装 FIT | installer 在内存中读取镜像自身 GPT 定位 boot/rootfs，分别写入板上固定分区（boot @LBA32768、rootfs @LBA819200）；引导区不参与写入 |
+
+            打包与自检脚本在仓库 `tools/`（`gptparse.c` 为整盘镜像的分区表读取工具）。
+
