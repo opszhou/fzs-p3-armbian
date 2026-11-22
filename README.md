@@ -19,6 +19,7 @@
 | `kernel-patches/` | 三个内核补丁（板级 dts / dwmac delayline / 开机自检） |
 | `board/` | 板卡数据库（P3-WXY4 条目） |
 | `compile-kernel/` | 内核 CI 构建框架（docker 工具链） |
+| `docs/legacy/` | L7–L10 时代引导链、救砖件与手工手册（归档只读，当前链不用） |
 
 ## 流水线
 
@@ -30,7 +31,7 @@
 ```
 
 - **出内核**：Actions → 编译内核 → Run（默认 `unifreq/linux-6.12.y-rockchip@main`）
-- **出固件**：Actions → 构建固件 → Run（内核默认取 `kernel_stable` 最新；基座默认 `flashkit_l10`）
+- **出固件**：Actions → 构建固件 → Run（内核默认取 `kernel_stable` 最新；基座留空 = 自动取最新一个带 02/03 的 Release）
 - 两者都不需要本地打包，真机交付一律取自 Release。
 
 ## 固件产物与刷写路径
