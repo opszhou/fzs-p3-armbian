@@ -15,7 +15,10 @@ FAIL=0
 die() { echo "FAIL: $1"; FAIL=1; }
 
 SZ=$(stat -c%s "$IN")
-H=$(head -c 4096 "$IN")
+# The header is plaintext zero-padded to 4096 bytes, so the raw slice carries
+# NULs. Bash keeps them out of the variable but warns about it (stderr, once per
+# substitution) - noise that hides real warnings in CI. Strip them explicitly.
+H=$(head -c 4096 "$IN" | tr -d '\000')
 MAGIC=$(echo "$H" | sed -n '1s/^\(P3WFS[0-9]*\)$/\1/p')
 START=$(echo "$H" | sed -n 's/^WRITE_LBA=//p')
 SEC=$(echo "$H" | sed -n 's/^IMAGE_SECTORS=//p')
