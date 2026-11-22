@@ -82,6 +82,9 @@ else
         ""|/dev/root|rootfs) ROOT_DEV=$(awk '$2=="/" {print $1; exit}' /proc/mounts) ;;
     esac
 fi
+EXT=${P3_EXT:-/boot/extlinux/extlinux.conf}
+FSTAB=${P3_FSTAB:-/etc/fstab}
+env=${P3_ENVFILE:-/boot/armbianEnv.txt}
 BOOT_DEV=${P3_BOOT_DEV-$(dev_of /boot 2>/dev/null)}
 
 # Sandbox guard: when the test hooks are in use, refuse to touch anything that
@@ -114,12 +117,58 @@ if ! check_ext "${ROOT_DEV}" root; then
     exit 0
 fi
 
+OLD_ROOT_UUID=$(blkid -s UUID -o value "${ROOT_DEV}")
+if [ -z "${OLD_ROOT_UUID}" ]; then
+    log "root uuid unreadable, nothing to do"
+    : >"${MARK}"
+    exit 0
+fi
+
+# Find the file that tells the kernel which rootfs to mount.  Usually /boot is
+# a mount of its own; some layouts keep extlinux on a partition that is never
+# mounted.  Renaming the rootfs UUID without rewriting that file produces a
+# machine that cannot boot, so locate it first and skip everything if it is
+# not there: not renaming is always safer than booting into a stale cmdline.
+PROBE_MNT=/run/p3-firstboot-probe
+if { [ -z "${P3_MARK:-}" ] || [ "${P3_ALLOW_PROBE:-0}" = 1 ]; } &&
+   [ ! -f "${EXT}" ] && [ -z "${P3_BOOT_DEV:-}" ]; then
+    for _d in $(lsblk -rno NAME,TYPE 2>/dev/null | awk '$2=="part"{print "/dev/"$1}'); do
+        [ "${_d}" = "${ROOT_DEV}" ] && continue
+        case "${_d}" in
+            /dev/loop*) ;;
+            *) [ -n "${P3_MARK:-}" ] && { log "SANDBOX: refusing probe of ${_d}"; continue; } ;;
+        esac
+        mkdir -p "${PROBE_MNT}"
+        mount -o ro "${_d}" "${PROBE_MNT}" 2>/dev/null || continue
+        if [ -f "${PROBE_MNT}/extlinux/extlinux.conf" ] &&
+           grep -q "root=UUID=${OLD_ROOT_UUID}" "${PROBE_MNT}/extlinux/extlinux.conf"; then
+            EXT="${PROBE_MNT}/extlinux/extlinux.conf"
+            env="${PROBE_MNT}/armbianEnv.txt"
+            BOOT_DEV="${_d}"
+            mount -o remount,rw "${PROBE_MNT}" 2>/dev/null || true
+            log "boot config found on ${_d} (that partition is not mounted at /boot)"
+            break
+        fi
+        umount "${PROBE_MNT}" 2>/dev/null || true
+    done
+fi
+
+if [ ! -f "${EXT}" ]; then
+    log "no rewriteable boot config at '${EXT}'; uuid change skipped, system stays bootable"
+    : >"${MARK}"
+    exit 0
+fi
+
 WANT_BOOT=0
-if [ -n "${BOOT_DEV}" ] && [ "${BOOT_DEV}" != "${ROOT_DEV}" ] && check_ext "${BOOT_DEV}" boot; then
+if [ "${BOOT_DEV}" != "${ROOT_DEV}" ]; then
+    if ! check_ext "${BOOT_DEV}" boot; then
+        log "boot fs cannot be renamed; a new root uuid with the old cmdline would not boot, skipped"
+        : >"${MARK}"
+        exit 0
+    fi
     WANT_BOOT=1
 fi
 
-OLD_ROOT_UUID=$(blkid -s UUID -o value "${ROOT_DEV}")
 NEW_ROOT_UUID=$(cat /proc/sys/kernel/random/uuid)
 OLD_BOOT_UUID=""
 NEW_BOOT_UUID=""
@@ -130,10 +179,6 @@ fi
 
 log "old root=${OLD_ROOT_UUID} boot=${OLD_BOOT_UUID:-none}"
 log "new root=${NEW_ROOT_UUID} boot=${NEW_BOOT_UUID:-none}"
-
-EXT=${P3_EXT:-/boot/extlinux/extlinux.conf}
-FSTAB=${P3_FSTAB:-/etc/fstab}
-env=${P3_ENVFILE:-/boot/armbianEnv.txt}
 
 cp -a "${FSTAB}" "${FSTAB}.p3bak" 2>/dev/null || true
 [ -f "${EXT}" ] && cp -a "${EXT}" "${EXT}.p3bak" 2>/dev/null || true
@@ -146,6 +191,8 @@ rollback() {
 }
 
 # rewrite the references first, the block devices second
+fstab_had_root=0
+grep -q "UUID=${OLD_ROOT_UUID}" "${FSTAB}" 2>/dev/null && fstab_had_root=1
 sed -i "s|UUID=${OLD_ROOT_UUID}|UUID=${NEW_ROOT_UUID}|g" "${FSTAB}" 2>/dev/null
 [ -f "${EXT}" ] && sed -i "s|root=UUID=${OLD_ROOT_UUID}|root=UUID=${NEW_ROOT_UUID}|g" "${EXT}"
 [ -f "${env}" ] && sed -i "s|UUID=${OLD_ROOT_UUID}|UUID=${NEW_ROOT_UUID}|g" "${env}"
@@ -153,6 +200,20 @@ if [ "${WANT_BOOT}" = 1 ]; then
     sed -i "s|UUID=${OLD_BOOT_UUID}|UUID=${NEW_BOOT_UUID}|g" "${FSTAB}"
 fi
 sync
+
+# Verify the text edits before the block devices move.  A sed that silently
+# matched nothing (wrong file, unexpected formatting) followed by a UUID rename
+# is an unbootable machine, so treat "not rewritten" as "do not rename".
+grep -q "root=UUID=${NEW_ROOT_UUID}" "${EXT}" || {
+    rollback "boot cmdline still points at the old uuid"
+    : >"${MARK}"
+    exit 0
+}
+if [ "${fstab_had_root}" = 1 ] && ! grep -q "UUID=${NEW_ROOT_UUID}" "${FSTAB}"; then
+    rollback "fstab still points at the old root uuid"
+    : >"${MARK}"
+    exit 0
+fi
 
 if [ "${WANT_BOOT}" = 1 ]; then
     if ! tune2fs -U "${NEW_BOOT_UUID}" "${BOOT_DEV}" 2>>"${LOG}"; then
@@ -172,6 +233,7 @@ fi
 log "root uuid changed"
 
 sync
+case "${EXT}" in "${PROBE_MNT}"/*) umount "${PROBE_MNT}" 2>/dev/null || true ;; esac
 : >"${MARK}"
 log "=== first boot: done, rebooting once ==="
 sync

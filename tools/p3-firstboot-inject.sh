@@ -28,7 +28,8 @@ fi
 img=${1:?usage: $0 [--seed-only] <ext4 image>}
 here=$(cd "$(dirname "$0")" && pwd)
 
-[ -f "$img" ] || { echo "FATAL: no such image: $img" >&2; exit 1; }
+# $img is normally a file, but a block device is accepted too (board tests)
+[ -e "$img" ] || { echo "FATAL: no such image: $img" >&2; exit 1; }
 
 typ=$(blkid -p -s TYPE -o value "$img" 2>/dev/null || true)
 case "$typ" in
