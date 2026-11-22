@@ -61,3 +61,35 @@ tools/mkfit.sh system.wfs Image board.dtb busybox-arm64 p3-installer-my.fit
 `build-firmware-p3.yml` 的 FIT 构建走同一条链：注入内核后的
 `data.img → mkwebflash.sh → p3wfs-check.sh → mkfit.sh`。CI 自己的镜像没有
 任何特权，和第三方镜像走完全相同的校验路径。
+
+---
+
+# 首启一次性配置（密码 / shell / UUID）
+
+| 文件 | 作用 |
+|---|---|
+| `p3-firstboot.sh` | 运行在盒子上的脚本：设 root 密码与 bash、删首登向导、换 rootfs 与 `/boot` 的 UUID 并同步 `extlinux.conf` / `armbianEnv.txt` / `fstab`，然后重启一次 |
+| `p3-firstboot.service` | oneshot 包装，`WantedBy=multi-user.target`，以 `/etc/p3-firstboot.done` 为条件 |
+| `p3-firstboot-inject.sh` | 构建期注入器：把上面两个文件写进 ext4 根分区并 enable，同时打开 `metadata_csum_seed` |
+
+```sh
+tools/p3-firstboot-inject.sh rootfs.img          # 装脚本 + 建 unit + enable + 开特性
+tools/p3-firstboot-inject.sh --seed-only fs.img  # 只开特性（给 boot 分区用）
+```
+
+注入器用 `debugfs` 而非 loop 挂载：CI runner、笔记本、容器里行为一致，不需要 root，也不依赖 `/dev/loop`。
+每一步都回读校验（脚本内容逐字节 `cmp`、符号链接类型、脚本权限 0755），任何一步没落地都会 `FATAL` 退出，
+不会让一个“什么都没装”的镜像发布出去。
+
+## 为什么必须换 UUID
+
+CI 镜像是整盘逐字节复制。用它 dd 出来的 U 盘，rootfs UUID 与源 eMMC 完全相同，
+内核按探测顺序解析 `root=UUID=` → 会抡到 eMMC，现象就是“选了 U 盘启动却起了 eMMC”。
+首启把本机 UUID 改成随机值后，以后用同一镜像做的盘都不可能再撞。
+
+## 硬前提：`metadata_csum_seed`
+
+未开启这个特性的 ext4 在**挂载状态下**拒绝改 UUID（`tune2fs` 会报
+“The UUID may only be changed when the filesystem is unmounted”）。注入器用
+`tune2fs -O metadata_csum_seed` 在未挂载时打开它，之后首启才能在线改。
+特性缺失时脚本**不改任何东西**，只写完成标记退出，系统仍可正常启动。
