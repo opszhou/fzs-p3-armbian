@@ -46,14 +46,27 @@ cat > "$W/i.its" <<ITS
 /dts-v1/;
 / { description="P3 webflash installer (universal)"; #address-cells=<1>;
   images {
-    k { description="kernel"; data = /incbin/("$KERNEL_ABS"); type="kernel"; arch="arm64"; os="linux"; compression="none"; load=<0x20000000>; entry=<0x20000000>; h { algo="sha256"; }; };
-    r { description="initramfs"; data = /incbin/("$RD_ABS"); type="ramdisk"; arch="arm64"; os="linux"; compression="none"; load=<0x24000000>; h { algo="sha256"; }; };
-    f { description="dtb"; data = /incbin/("$DTB_ABS"); type="flat_dt"; arch="arm64"; compression="none"; load=<0x40000000>; h { algo="sha256"; }; };
+    k { description="kernel"; data = /incbin/("$KERNEL_ABS"); type="kernel"; arch="arm64"; os="linux"; compression="none"; load=<0x20000000>; entry=<0x20000000>; hash-1 { algo="sha256"; }; };
+    r { description="initramfs"; data = /incbin/("$RD_ABS"); type="ramdisk"; arch="arm64"; os="linux"; compression="none"; load=<0x24000000>; hash-1 { algo="sha256"; }; };
+    f { description="dtb"; data = /incbin/("$DTB_ABS"); type="flat_dt"; arch="arm64"; compression="none"; load=<0x40000000>; hash-1 { algo="sha256"; }; };
   };
-  configurations { default="c"; c { kernel="k"; ramdisk="r"; fdt="f"; }; };
+  configurations { default="c"; c { kernel="k"; ramdisk="r"; fdt="f"; $P3_SIG_NODE }; };
 };
 ITS
 OUTDIR=$(mkdir -p "$(dirname "$OUT")" && cd "$(dirname "$OUT")" && pwd)
-mkimage -f "$W/i.its" "$OUTDIR/$(basename "$OUT")" >/dev/null
+# 方案A 可选 FIT 签名（M1/M2）：设 P3_FIT_KEYS=<密钥目录，含 p3.key（+p3.crt）> 启用。
+# P3_FIT_DTB=<接收公钥的 u-boot.dtb>（验方 = U-Boot，公钥必须编进它的 DTB）；-r = required。
+# 未设置时行为与旧版完全一致（仅 sha256 哈希，无签名）。
+P3_SIG_NODE=""; P3_MKIMG_ARGS=""
+if [ -n "${P3_FIT_KEYS:-}" ]; then
+  [ -f "$P3_FIT_KEYS/p3.key" ] || { echo "ERROR: $P3_FIT_KEYS/p3.key 不存在"; exit 1; }
+  [ -f "$P3_FIT_KEYS/p3.crt" ] || openssl req -x509 -key "$P3_FIT_KEYS/p3.key" -out "$P3_FIT_KEYS/p3.crt" -subj "/CN=p3-secureboot" -days 3650 >/dev/null 2>&1
+  P3_SIG_NODE=$'    signature-1 { algo = "sha256,rsa2048"; key-name-hint = "p3"; sign-images = "kernel", "ramdisk", "fdt"; };'
+  P3_MKIMG_ARGS="-k "$P3_FIT_KEYS" -r"
+  [ -n "${P3_FIT_DTB:-}" ] && P3_MKIMG_ARGS="$P3_MKIMG_ARGS -K "$P3_FIT_DTB""
+  echo "FIT signing: enabled (keys=$P3_FIT_KEYS dtb=${P3_FIT_DTB:-none})"
+fi
+mkimage -f "$W/i.its" $P3_MKIMG_ARGS "$OUTDIR/$(basename "$OUT")" >/dev/null
+[ -n "${P3_FIT_KEYS:-}" ] && echo "FIT signed: $(basename "$OUT") (rsa2048, required)"
 FSHA=$(sha256sum "$OUTDIR/$(basename "$OUT")" | awk '{print $1}')
 echo "FIT built: $OUT sha=$FSHA"
