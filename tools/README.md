@@ -3,6 +3,33 @@
 板上刷过我们的 U-Boot（任意版本）后，**任何人**都可以把自己的
 系统镜像打包成 FIT，通过网页刷入。引导区永远不会被写入。
 
+
+## GPT 分区表生成（firmware/gpt.img + 04_backup_gpt.img）
+
+仓库里的两个 GPT 二进制不再是手维护的黑盒，由 `tools/mkgpt.py` 从布局参数确定性生成：
+
+```sh
+# 生成到 build/gpt/
+python3 tools/mkgpt.py --out-dir build/gpt
+
+# 生成并与仓库内已提交的二进制逐字节比对（CI 使用此模式）
+python3 tools/mkgpt.py --out-dir build/gpt --verify firmware
+```
+
+默认参数对应 P3 的 14.56 GiB eMMC：
+
+| 项目 | LBA |
+|---|---|
+| 保护性 MBR / 主 GPT 头 / 分区表 | 0 / 1 / 2–33 |
+| 引导区保留（U-Boot 所在，**不可作为分区**） | 0–32767 |
+| p1 boot | 32768–819199（384M） |
+| p2 rootfs | 819200–30535646（14.2G） |
+| 备份分区表 / 备份 GPT 头 | 30535647–30535678 / 30535679 |
+
+脚本内置硬约束：p1 起始不得小于 LBA32768（引导区铁律）；分区范围必须严格递增且不越过备份 GPT 区。
+GUID 固定为历史值，因此同一参数任意次运行都产出完全相同的字节（CI 才能用 `--verify` 做篡改检测）。
+换用不同容量 eMMC 时传 `--disk-sectors N`，其余布局自动推导。
+
 ## 格式定义：P3WFS1
 
 ```
