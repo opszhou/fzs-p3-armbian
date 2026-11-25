@@ -41,6 +41,10 @@ chmod 755 "$I/init"
 # force inode owner root:root (runner uid would differ on the board's init run)
 (cd "$I" && find . -print0 | cpio --null --owner=0:0 -o -H newc | gzip -9 > "$W/initrd.gz")
 
+# signing hooks are configured below (P3_FIT_KEYS, optional); the .its
+# heredoc references $P3_SIG_NODE, so initialize before writing it -
+# with set -u an unset variable aborts the script mid-heredoc
+P3_SIG_NODE=""; P3_MKIMG_ARGS=""
 KERNEL_ABS=$(readlink -f "$KERNEL"); DTB_ABS=$(readlink -f "$DTB"); RD_ABS="$W/initrd.gz"
 cat > "$W/i.its" <<ITS
 /dts-v1/;
@@ -57,7 +61,6 @@ OUTDIR=$(mkdir -p "$(dirname "$OUT")" && cd "$(dirname "$OUT")" && pwd)
 # 方案A 可选 FIT 签名（M1/M2）：设 P3_FIT_KEYS=<密钥目录，含 p3.key（+p3.crt）> 启用。
 # P3_FIT_DTB=<接收公钥的 u-boot.dtb>（验方 = U-Boot，公钥必须编进它的 DTB）；-r = required。
 # 未设置时行为与旧版完全一致（仅 sha256 哈希，无签名）。
-P3_SIG_NODE=""; P3_MKIMG_ARGS=""
 if [ -n "${P3_FIT_KEYS:-}" ]; then
   [ -f "$P3_FIT_KEYS/p3.key" ] || { echo "ERROR: $P3_FIT_KEYS/p3.key 不存在"; exit 1; }
   [ -f "$P3_FIT_KEYS/p3.crt" ] || openssl req -x509 -key "$P3_FIT_KEYS/p3.key" -out "$P3_FIT_KEYS/p3.crt" -subj "/CN=p3-secureboot" -days 3650 >/dev/null 2>&1
