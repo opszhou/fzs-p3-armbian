@@ -61,23 +61,30 @@ jobs:
         run: |
           mkdir -p build/base && cd build/base
           BASE_TAG="${{ inputs.base_tag }}"
-          if [ -z "${BASE_TAG}" ]; then
-            # No pinned tag by default: a hardcoded one (flashkit_l10) goes stale
-            # the moment releases are renamed or pruned, and the build then dies
-            # on a 404 before doing any work.
-            BASE_TAG=$(curl -fsSL --retry 5               -H "Accept: application/vnd.github+json"               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}"               "https://api.github.com/repos/${KERNEL_REPO}/releases?per_page=30" |               jq -r '[.[] | select(([.assets[].name] | index("02_boot.img")) != null)
-                            | select(([.assets[].name] | index("03_rootfs.img")) != null)]
-                     | .[0].tag_name')
+          AUTH="Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}"
+          fetch_base() {  # $1 = tag
+            for f in 02_boot.img 03_rootfs.img; do
+              curl -fsSL --retry 5 -H "Accept: application/octet-stream" -H "$AUTH" \
+                "https://github.com/${KERNEL_REPO}/releases/download/$1/${f}" -o "${f}" || return 1
+            done
+          }
+          if [ -n "${BASE_TAG}" ]; then
+            fetch_base "${BASE_TAG}" || { echo "ERROR: pinned base tag ${BASE_TAG} fetch failed"; exit 1; }
+          elif fetch_base base_firmware; then
+            # rolling internal release: every build refreshes the pair here,
+            # so the public firmware releases no longer need to carry them
+            BASE_TAG=base_firmware
+          else
+            # legacy fallback: latest public release that still carries the pair
+            BASE_TAG=$(curl -fsSL --retry 5 -H "Accept: application/vnd.github+json" -H "$AUTH" \
+              "https://api.github.com/repos/${KERNEL_REPO}/releases?per_page=30" | \
+              jq -r '[.[] | select(([.assets[].name] | index("02_boot.img")) != null)
+                     | select(([.assets[].name] | index("03_rootfs.img")) != null)]
+                     | .[0].tag_name // empty')
+            [ -n "${BASE_TAG}" ] || { echo "no release carries both 02_boot.img and 03_rootfs.img"; exit 1; }
+            fetch_base "${BASE_TAG}" || { echo "ERROR: base fetch failed"; exit 1; }
           fi
-          [ -n "${BASE_TAG}" ] && [ "${BASE_TAG}" != "null" ]             || { echo "no release carries both 02_boot.img and 03_rootfs.img"; exit 1; }
           echo "base tag: ${BASE_TAG}"
-          for f in 02_boot.img 03_rootfs.img; do
-            curl -fsSL --retry 5 -C - \
-              -H "Accept: application/octet-stream" \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://github.com/${KERNEL_REPO}/releases/download/${BASE_TAG}/${f}" \
-              -o ${f}
-          done
           ls -l
 
       # Without this, a stick made from this image carries exactly the same
@@ -259,21 +266,22 @@ jobs:
         run: |
           set -e
           OUT=build/output; mkdir -p ${OUT}
-          cp build/base/02_boot.img build/base/03_rootfs.img ${OUT}/
-          cp firmware/gpt.img firmware/04_backup_gpt.img firmware/u-boot.bin ${OUT}/
-          cp firmware/u-boot.version ${OUT}/
+          # public release ships 4 files only (FIT / img.xz / bootarea.img /
+          # SHA256SUMS.txt).  Intermediates live in build/base and firmware/;
+          # the pair in build/base is published to the rolling base_firmware
+          # release by a later step.
 
           # ---- slim：flashkit 布局整盘镜像（01 引导区 + boot@32768 + rootfs@819200）----
           BOOT_START=32768; ROOT_START=819200; BOOT_SECS=786432
-          ROOT_SECS=$(stat -c%s ${OUT}/03_rootfs.img | awk '{printf "%d", $1/512 + ($1%512?1:0)}')
+          ROOT_SECS=$(stat -c%s ../../build/base/03_rootfs.img | awk '{printf "%d", $1/512 + ($1%512?1:0)}')
           SLIM_SECS=$((ROOT_START + ROOT_SECS + 33))
           truncate -s $((SLIM_SECS * 512)) ${OUT}/slim.raw
           # boot area: sfdisk below writes protective MBR + primary GPT + entries
           # + disk-end backup for the freshly sized file, so nothing needs to be
           # pre-seeded at LBA0. Only the U-Boot payload is copied in explicitly.
-          dd if=firmware/u-boot.bin of=${OUT}/slim.raw bs=512 seek=64 conv=notrunc status=none
-          dd if=${OUT}/02_boot.img  of=${OUT}/slim.raw bs=512 seek=${BOOT_START} conv=notrunc status=none
-          dd if=${OUT}/03_rootfs.img of=${OUT}/slim.raw bs=512 seek=${ROOT_START} conv=notrunc status=none
+          dd if=../../firmware/u-boot.bin   of=${OUT}/slim.raw bs=512 seek=64 conv=notrunc status=none
+          dd if=../../build/base/02_boot.img   of=${OUT}/slim.raw bs=512 seek=${BOOT_START} conv=notrunc status=none
+          dd if=../../build/base/03_rootfs.img of=${OUT}/slim.raw bs=512 seek=${ROOT_START} conv=notrunc status=none
           cd ${OUT}
           sfdisk --force slim.raw <<PTABLE
           label: gpt
@@ -294,15 +302,15 @@ jobs:
           echo "full img.xz: $(du -m p3_armbian_full-${KERNEL_VER}.img.xz | cut -f1)MB"
 
           # ---- bootarea package: GPT + U-Boot as one 16MB block (MaskRom wl 0x0) ----
-          # (already cd'd into ${OUT}; gpt.img / u-boot.bin were copied here above)
           truncate -s $((32768 * 512)) bootarea.img
-          dd if=gpt.img          of=bootarea.img bs=512 seek=0  conv=notrunc status=none
-          dd if=u-boot.bin of=bootarea.img bs=512 seek=64 conv=notrunc status=none
+          dd if=../../firmware/gpt.img  of=bootarea.img bs=512 seek=0  conv=notrunc status=none
+          dd if=../../firmware/u-boot.bin of=bootarea.img bs=512 seek=64 conv=notrunc status=none
           echo "bootarea.img: GPT@LBA0 + U-Boot@LBA64 (16MB, MaskRom one-shot wl 0x0)"
 
           # ---- 校验清单 ----
-          sha256sum gpt.img 04_backup_gpt.img u-boot.bin 02_boot.img 03_rootfs.img bootarea.img p3_armbian_full-${KERNEL_VER}.img.xz > SHA256SUMS.txt
+          sha256sum bootarea.img p3_armbian_full-${KERNEL_VER}.img.xz > SHA256SUMS.txt
           [ -f FIT_SHA256.txt ] && cat FIT_SHA256.txt >> SHA256SUMS.txt || true
+          rm -f FIT_SHA256.txt   # merged into SHA256SUMS.txt above
           cat SHA256SUMS.txt
           # unique tag per build: kernel version + UTC timestamp, keeps history
           echo "FIRMWARE_TAG=firmware_${KERNEL_VER}_$(date -u +%Y%m%d-%H%M)" >> ${GITHUB_ENV}
@@ -332,16 +340,17 @@ jobs:
             - 首启自动配置：`root/password`、`bash`、去掉首登向导；首次开机自行换掉本机的 rootfs/boot UUID 后重启一次（约 10 秒）。
               这一步是为了让用同一镜像 dd 出来的 U 盘不再和 eMMC 共用 `root=UUID=`（否则“U 盘启动”会静默起 eMMC）。
 
-            配套小件（分件刷机 / 引导）：
+            本 Release 只带四个文件：FIT、整盘 img.xz、bootarea.img、SHA256SUMS.txt。
+            分件不再随版发布 —— 引导件内容极少变化，以仓库 `firmware/` 为准；
+            boot/rootfs 基座在滚动 Release `base_firmware`（CI 内部源，仅在变化时更新）。
 
-            | 文件 | 用途 |
-            |---|---|
-            | bootarea.img | 引导区整包（GPT @LBA0 + U-Boot @LBA64，16MB）：MaskRom `wl 0x0` 一次写入 |
-            | gpt.img / u-boot.bin | 两件式引导（与上等价，分两次写）：GPT `wl 0x0` + U-Boot `wl 0x40` |
-            | 04_backup_gpt.img | 盘尾备份 GPT（`wl 0x01D1EFDF`）：用 bootarea.img 或 gpt.img 重建主表后**建议一并写入**，否则 Linux 会报 backup GPT 不一致 |
-            | 02_boot.img / 03_rootfs.img | boot 分区 `wl 0x8000` / rootfs 分区 `wl 0xC8000` |
+            | 需要分件时 | 去哪拿 | 刷写 |
+            |---|---|---|
+            | GPT / U-Boot 引导件 | 仓库 `firmware/`（或 `bootarea.img` 一件搞定） | GPT `wl 0x0` + U-Boot `wl 0x40`；bootarea 整包 `wl 0x0` |
+            | 04_backup_gpt.img | 仓库 `firmware/` | 盘尾 `wl 0x01D1EFDF`（重建分区表后建议一并写入，否则 Linux 报 backup GPT 不一致） |
+            | 02_boot.img / 03_rootfs.img | Release `base_firmware` | boot `wl 0x8000` / rootfs `wl 0xC8000` |
 
-            - SHA256SUMS.txt 覆盖以上全部文件；刷机命令见仓库 `firmware/README.md`
+            - SHA256SUMS.txt 覆盖本 Release 全部文件；刷机命令见仓库 `firmware/README.md`
 
             ### 刷写方式说明
 
@@ -359,3 +368,30 @@ jobs:
 
             打包与自检脚本在仓库 `tools/`（`gptparse.c` 为整盘镜像的分区表读取工具）。
 
+      - name: Refresh rolling base_firmware release (02/03, only if changed)
+        if: ${{ steps.pack.outputs.status == 'success' && !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          B=build/base
+          if gh release view base_firmware --repo ${KERNEL_REPO} >/dev/null 2>&1; then
+            skip=0
+            for f in 02_boot.img 03_rootfs.img; do
+              want=$(sha256sum ${B}/${f} | awk '{print $1}')
+              have=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${KERNEL_REPO}/releases/tags/base_firmware" | \
+                jq -r --arg n "${f}" '.assets[] | select(.name==$n) | .digest // empty' | sed 's/^sha256://' || true)
+              if [ "${want}" = "${have}" ]; then echo "${f}: unchanged"; skip=$((skip+1));
+              else echo "${f}: changed/new"; fi
+            done
+            if [ "${skip}" = "2" ]; then echo "base unchanged, nothing to upload"; exit 0; fi
+            gh release upload base_firmware --repo ${KERNEL_REPO} --clobber \
+              ${B}/02_boot.img ${B}/03_rootfs.img
+          else
+            gh release create base_firmware --repo ${KERNEL_REPO} \
+              --title "base firmware (rolling, CI internal)" \
+              --notes "02_boot.img / 03_rootfs.img 滚动基座，构建固件的自动来源；内容仅在变化时更新。不是发布件，请勿从此处下载刷写。" \
+              ${B}/02_boot.img ${B}/03_rootfs.img
+          fi
