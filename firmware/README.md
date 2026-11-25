@@ -6,9 +6,9 @@
 | 文件 | 大小 | 写入地址 | 用途 |
 |---|---|---|---|
 | `gpt.img` | 32 KiB | `0x0`（LBA 0） | 保护 MBR + 主 GPT（头 + 分区项），不含固件 |
-| `u-boot-basic.bin` | 9.0 MiB | `0x40`（LBA 64） | basic 档 U-Boot（eMMC 引导 + 网页刷机），版本见 `u-boot-basic.version` |
+| `u-boot.bin` | 9.2 MiB | `0x40`（LBA 64） | U-Boot（eMMC 引导 + 网页刷机），版本见 `u-boot.version` |
 | `04_backup_gpt.img` | 16,896 B | 盘尾（`0x01D1EFDF`） | 备份 GPT，可选；主 GPT 有效时不会被读 |
-| `u-boot-basic.version` | — | — | 发布版号，CI 会与二进制内嵌版本双向校验 |
+| `u-boot.version` | — | — | 发布版号，CI 会与二进制内嵌版本双向校验 |
 | `SHA256SUMS.txt` | — | — | 上面三个镜像的 sha256；同时是 CI 的引导件门禁 |
 
 GPT 与固件分离的好处：换 U-Boot 不碰分区表，改分区表不碰 U-Boot。
@@ -27,20 +27,21 @@ MASKROM 救砖 Loader 在 [../bootloader/](../bootloader/)。
 ### 2. 整盘镜像（Rufus / Etcher / dd）
 
 `p3_armbian_full-<内核>.img.xz` 可直接写盘（Rufus、Etcher、`dd` 都认 xz）。
-写 U 盘后从 U 盘引导需要 plus / pro 档 U-Boot；basic 档没有 USB host 栈。
+2.4.0 起档位已合并为运行时闸门，单一 `u-boot.bin` 即含完整功能；
+2.2.0 及以前的旧版中 basic 档没有 USB host 栈，从 U 盘引导需要 plus / pro 档。
 
 ### 3. 分件写入（RKDevTool / upgrade_tool，产线与救砖）
 
 | 行 | 地址 | 文件 |
 |---|---|---|
 | 1 | `0x00000000` | `gpt.img` |
-| 2 | `0x00004000` | `u-boot-basic.bin` |
+| 2 | `0x00004000` | `u-boot.bin` |
 | 3 | `0x00008000` | `02_boot.img` |
 | 4 | `0x000C8000` | `03_rootfs.img` |
 
 ```bat
 upgrade_tool.exe wl 0x0      gpt.img
-upgrade_tool.exe wl 0x40     u-boot-basic.bin
+upgrade_tool.exe wl 0x40     u-boot.bin
 upgrade_tool.exe wl 0x8000   02_boot.img
 upgrade_tool.exe wl 0xC8000  03_rootfs.img
 ```
