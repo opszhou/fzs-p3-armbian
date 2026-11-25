@@ -3,12 +3,12 @@
 # Use this to SELF-CHECK any image you pack: it performs the same gates the
 # on-board installer enforces, plus full content sha verification.
 #
-# usage: p3wfs-check.sh <image.wfs> [disk_end_sectors=3125281]
-#   disk_end_sectors = total eMMC sectors (P3 default 3125281)
+# usage: p3wfs-check.sh <image.wfs> [disk_end_sectors=30535680]
+#   disk_end_sectors = total eMMC sectors (P3 default 30535680)
 # exit 0 = OK to flash, 1 = rejected
 set -euo pipefail
 IN=${1:?usage: p3wfs-check.sh <image.wfs> [disk_end_sectors]}
-DISK=${2:-3125281}
+DISK=${2:-30535680}
 BOOTAREA_END=32768
 FAIL=0
 

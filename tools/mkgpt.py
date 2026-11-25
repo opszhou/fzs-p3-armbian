@@ -169,6 +169,8 @@ def verify(generated, reference, label):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--print-sector", action="store_true",
+                   help="print only the disk sector count (for CI to consume)")
     p.add_argument("--disk-sectors", type=int, default=DEFAULT_DISK_SECTORS)
     p.add_argument("--boot-start", type=int, default=DEFAULT_BOOT_START)
     p.add_argument("--boot-end", type=int, default=DEFAULT_BOOT_END)
@@ -179,6 +181,10 @@ def main():
                         "DIR/04_backup_gpt.img; implies no write unless "
                         "--out-dir is also given")
     args = p.parse_args()
+
+    if args.print_sector:
+        print(args.disk_sectors)
+        return 0
 
     primary, backup = build(args)
 

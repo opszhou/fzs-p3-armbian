@@ -70,7 +70,8 @@ tools/mkfit.sh system.wfs Image board.dtb busybox-arm64 p3-installer-my.fit
 1. magic / 头部字段齐全、数值合法
 2. 文件大小 = 4096 + IMAGE_SECTORS×512（声明与文件自洽）
 3. **WRITE_LBA ≥ 32768**——想覆盖 GPT/U-Boot 引导区的包直接拒绝
-4. WRITE_LBA + IMAGE_SECTORS ≤ 板子 eMMC 总扇区（默认 3125281）
+4. WRITE_LBA + IMAGE_SECTORS ≤ 板子 eMMC 总扇区（默认 30535680；
+   由 `tools/mkgpt.py --print-sector` 提供，CI 从同一来源读取）
 5. 全量解压后 sha256 与 IMAGE_SHA256 一致
 
 任何一条不过 → 刷机前就拦下；即便绕过 check，板上 installer 也会再次强制

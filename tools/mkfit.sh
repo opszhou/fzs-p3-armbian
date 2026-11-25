@@ -4,7 +4,7 @@
 #
 # usage: mkfit.sh <image> <Image> <board.dtb> <busybox> <out.fit> [disk_end_sectors] [gptparse]
 #   image = P3WFS1 .wfs OR whole-disk image (xz/gzip/raw GPT) - init auto-detects
-#   disk_end_sectors defaults to 3125281 (P3 eMMC); baked into the initramfs so
+#   disk_end_sectors defaults to 30535680 (P3 eMMC); baked into the initramfs so
 #   the installer can refuse images that would run past the end of the disk.
 #   gptparse (optional, aarch64 static binary) enables whole-disk GPT parsing.
 set -euo pipefail
@@ -13,7 +13,7 @@ KERNEL=${2:?missing kernel Image}
 DTB=${3:?missing board dtb}
 BUSYBOX=${4:?missing busybox}
 OUT=${5:?missing output .fit path}
-DISK=${6:-3125281}
+DISK=${6:-30535680}
 GPTPARSE=${7:-}
 
 HERE=$(cd "$(dirname "$0")" && pwd)

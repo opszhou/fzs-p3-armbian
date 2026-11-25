@@ -33,6 +33,9 @@ jobs:
           set -e
           python3 tools/mkgpt.py --out-dir build/gpt --verify firmware
           echo "GPT images reproduced byte-for-byte from tools/mkgpt.py"
+          # Single source of truth for the disk geometry: every tool that
+          # rejects out-of-range flashes reads this value, never a literal.
+          echo "P3_DISK_SECTORS=$(python3 tools/mkgpt.py --print-sector)" >> $GITHUB_ENV
 
       - name: Resolve kernel version
         id: ver
@@ -223,7 +226,11 @@ jobs:
           #    LBA0-32767 (protective MBR + GPT + U-Boot bootarea) is NEVER touched
           #    by the installer, so whatever U-Boot the board has (any)
           #    is preserved. This is a hard product rule.
-          TOTAL=3125281; SEC=512; BOOT_LBA=32768; ROOTFS_LBA=819200; ROOTFS_SECTORS=2306048
+          # TOTAL = whole-disk sectors (from mkgpt.py, via GITHUB_ENV).
+          # ROOTFS_SECTORS = the actual rootfs IMAGE length in sectors,
+          # NOT the partition capacity (29716447) - it sizes data.img exactly.
+          TOTAL=${P3_DISK_SECTORS:?P3_DISK_SECTORS not exported by GPT step}
+          SEC=512; BOOT_LBA=32768; ROOTFS_LBA=819200; ROOTFS_SECTORS=2306048
           DATA_START=${BOOT_LBA}                              # 32768
           # write exactly boot + rootfs partitions; do NOT touch main GPT, bootarea, or backup GPT
           DATA_SECT=$((ROOTFS_LBA + ROOTFS_SECTORS - DATA_START))   # 3125248-32768 = 3092480 sectors
