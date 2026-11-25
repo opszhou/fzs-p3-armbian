@@ -144,7 +144,7 @@ jobs:
 
           # Source parts: base rootfs (26.11 noble + 6.12.81), busybox.
           # FIT contains NO U-Boot: installer writes only LBA32768+ (boot/rootfs),
-          # preserving whatever U-Boot is on the board (pro/basic/any version).
+          # preserving whatever U-Boot is on the board (any version).
           mkdir -p build/fit && cd build/fit
           for f in p3-rootfs-base-26.11.img busybox-arm64; do
             curl -fsSL --retry 5 -H "Accept: application/octet-stream" \
@@ -154,23 +154,23 @@ jobs:
           # same first-boot payload as the 02/03 path (separate rootfs baseline)
           bash ../../tools/p3-firstboot-inject.sh p3-rootfs-base-26.11.img
           # Paired bootloader gate. The sha lives in firmware/SHA256SUMS.txt, so
-          # dropping a new basic build is "replace bin + regenerate sums" -- there
+          # dropping a new U-Boot build is "replace bin + regenerate sums" -- there
           # is no sha hardcoded in this workflow to go stale.
           ( cd ../../firmware && sha256sum -c SHA256SUMS.txt --ignore-missing ) \
-            || { echo "ERROR: firmware/u-boot-basic.bin does not match firmware/SHA256SUMS.txt"; exit 1; }
-          BASIC_VER=$(tr -d ' \n' < ../../firmware/u-boot-basic.version)
+            || { echo "ERROR: firmware/u-boot.bin does not match firmware/SHA256SUMS.txt"; exit 1; }
+          UBOOT_VER=$(tr -d ' \n' < ../../firmware/u-boot.version)
           # year-agnostic: the release cadence has already crossed 2025 -> 2026;
           # "|| true" guards set -e when grep misses, the -n check reports it.
-          BASICTXT=$(strings ../../firmware/u-boot-basic.bin | grep -m1 "U-Boot 20") || true
-          [ -n "${BASIC_VER}" ] || { echo "ERROR: firmware/u-boot-basic.version is empty"; exit 1; }
-          [ -n "${BASICTXT}" ] || { echo "ERROR: no U-Boot version string in firmware/u-boot-basic.bin"; exit 1; }
+          UBOOT_TXT=$(strings ../../firmware/u-boot.bin | grep -m1 "U-Boot 20") || true
+          [ -n "${UBOOT_VER}" ] || { echo "ERROR: firmware/u-boot.version is empty"; exit 1; }
+          [ -n "${UBOOT_TXT}" ] || { echo "ERROR: no U-Boot version string in firmware/u-boot.bin"; exit 1; }
           # tier segment dropped: tiers merged into a runtime gate in 2.4.0, the
           # suffix is now "-fzs_p3" instead of "-basic-"; match on "-<ver>-" only.
-          case "${BASICTXT}" in *"-${BASIC_VER}-"*) ;;
-            *) echo "ERROR: binary says '${BASICTXT}', version file says ${BASIC_VER}"; exit 1 ;;
+          case "${UBOOT_TXT}" in *"-${UBOOT_VER}-"*) ;;
+            *) echo "ERROR: binary says '${UBOOT_TXT}', version file says ${UBOOT_VER}"; exit 1 ;;
           esac
-          echo "paired basic U-Boot: ${BASIC_VER} (${BASICTXT})"
-          echo "BASIC_VER=${BASIC_VER}" >> ${GITHUB_ENV}
+          echo "paired U-Boot: ${UBOOT_VER} (${UBOOT_TXT})"
+          echo "UBOOT_VER=${UBOOT_VER}" >> ${GITHUB_ENV}
 
           # kernel Image + board dtb from the injected 02_boot.img
           M=$(mktemp -d)
@@ -208,7 +208,7 @@ jobs:
 
           # 2) assemble data image: ONLY partition area from LBA32768 onward.
           #    LBA0-32767 (protective MBR + GPT + U-Boot bootarea) is NEVER touched
-          #    by the installer, so whatever U-Boot the board has (pro/basic/any)
+          #    by the installer, so whatever U-Boot the board has (any)
           #    is preserved. This is a hard product rule.
           TOTAL=3125281; SEC=512; BOOT_LBA=32768; ROOTFS_LBA=819200; ROOTFS_SECTORS=2306048
           DATA_START=${BOOT_LBA}                              # 32768
@@ -249,7 +249,7 @@ jobs:
           FSHA=$(sha256sum ${FIT} | awk '{print $1}')
 
           # FIT embeds NO U-Boot; bootarea is preserved on the board.
-          # basic U-Boot sha was gated at source above (BASIC_SHA) as the paired bootloader.
+          # U-Boot sha was gated at source above (UBOOT_SHA) as the paired bootloader.
           printf '%s  p3-installer-%s.fit\n' "${FSHA}" "${KERNEL_VER}" > ../../build/output/FIT_SHA256.txt
           echo "FIT built: ${FIT} sha=${FSHA}"
           echo "FIT_VER=${KERNEL_VER}" >> ${GITHUB_ENV}
@@ -260,8 +260,8 @@ jobs:
           set -e
           OUT=build/output; mkdir -p ${OUT}
           cp build/base/02_boot.img build/base/03_rootfs.img ${OUT}/
-          cp firmware/gpt.img firmware/04_backup_gpt.img firmware/u-boot-basic.bin ${OUT}/
-          cp firmware/u-boot-basic.version ${OUT}/
+          cp firmware/gpt.img firmware/04_backup_gpt.img firmware/u-boot.bin ${OUT}/
+          cp firmware/u-boot.version ${OUT}/
 
           # ---- slim：flashkit 布局整盘镜像（01 引导区 + boot@32768 + rootfs@819200）----
           BOOT_START=32768; ROOT_START=819200; BOOT_SECS=786432
@@ -271,7 +271,7 @@ jobs:
           # boot area: sfdisk below writes protective MBR + primary GPT + entries
           # + disk-end backup for the freshly sized file, so nothing needs to be
           # pre-seeded at LBA0. Only the U-Boot payload is copied in explicitly.
-          dd if=firmware/u-boot-basic.bin of=${OUT}/slim.raw bs=512 seek=64 conv=notrunc status=none
+          dd if=firmware/u-boot.bin of=${OUT}/slim.raw bs=512 seek=64 conv=notrunc status=none
           dd if=${OUT}/02_boot.img  of=${OUT}/slim.raw bs=512 seek=${BOOT_START} conv=notrunc status=none
           dd if=${OUT}/03_rootfs.img of=${OUT}/slim.raw bs=512 seek=${ROOT_START} conv=notrunc status=none
           cd ${OUT}
@@ -293,15 +293,15 @@ jobs:
           xz -T0 -9 -k slim.raw && mv slim.raw.xz p3_armbian_full-${KERNEL_VER}.img.xz && rm slim.raw
           echo "full img.xz: $(du -m p3_armbian_full-${KERNEL_VER}.img.xz | cut -f1)MB"
 
-          # ---- bootarea package: GPT + basic U-Boot as one 16MB block (MaskRom wl 0x0) ----
-          # (already cd'd into ${OUT}; gpt.img / u-boot-basic.bin were copied here above)
-          truncate -s $((32768 * 512)) bootarea-basic.img
-          dd if=gpt.img          of=bootarea-basic.img bs=512 seek=0  conv=notrunc status=none
-          dd if=u-boot-basic.bin of=bootarea-basic.img bs=512 seek=64 conv=notrunc status=none
-          echo "bootarea-basic.img: GPT@LBA0 + basic U-Boot@LBA64 (16MB, MaskRom one-shot wl 0x0)"
+          # ---- bootarea package: GPT + U-Boot as one 16MB block (MaskRom wl 0x0) ----
+          # (already cd'd into ${OUT}; gpt.img / u-boot.bin were copied here above)
+          truncate -s $((32768 * 512)) bootarea.img
+          dd if=gpt.img          of=bootarea.img bs=512 seek=0  conv=notrunc status=none
+          dd if=u-boot.bin of=bootarea.img bs=512 seek=64 conv=notrunc status=none
+          echo "bootarea.img: GPT@LBA0 + U-Boot@LBA64 (16MB, MaskRom one-shot wl 0x0)"
 
           # ---- 校验清单 ----
-          sha256sum gpt.img 04_backup_gpt.img u-boot-basic.bin 02_boot.img 03_rootfs.img bootarea-basic.img p3_armbian_full-${KERNEL_VER}.img.xz > SHA256SUMS.txt
+          sha256sum gpt.img 04_backup_gpt.img u-boot.bin 02_boot.img 03_rootfs.img bootarea.img p3_armbian_full-${KERNEL_VER}.img.xz > SHA256SUMS.txt
           [ -f FIT_SHA256.txt ] && cat FIT_SHA256.txt >> SHA256SUMS.txt || true
           cat SHA256SUMS.txt
           # unique tag per build: kernel version + UTC timestamp, keeps history
@@ -326,9 +326,9 @@ jobs:
             | 格式 | 文件 | 用途 |
             |---|---|---|
             | **FIT（webflash）** | `p3-installer-${{ env.FIT_VER }}.fit` | **下载后直接网页上传，无需解压**（FIT 内部数据已是 xz）：预配置 Armbian 26.11 noble |
-            | **整盘 img（直刷）** | `p3_armbian_full-${{ env.KERNEL_VER }}.img.xz` | 完整盘压缩包：GPT+basic U-Boot+boot+rootfs；Rufus/Etcher 可直接写 `.img.xz`，`dd` 前先 `unxz` |
+            | **整盘 img（直刷）** | `p3_armbian_full-${{ env.KERNEL_VER }}.img.xz` | 完整盘压缩包：GPT+U-Boot+boot+rootfs；Rufus/Etcher 可直接写 `.img.xz`，`dd` 前先 `unxz` |
 
-            - 配套引导：basic U-Boot `${{ env.BASIC_VER }}`（与 `u-boot-basic.sha256` / 二进制内嵌版本双向校验）
+            - 配套引导：U-Boot `${{ env.UBOOT_VER }}`（与 `SHA256SUMS.txt` / 二进制内嵌版本双向校验）
             - 首启自动配置：`root/password`、`bash`、去掉首登向导；首次开机自行换掉本机的 rootfs/boot UUID 后重启一次（约 10 秒）。
               这一步是为了让用同一镜像 dd 出来的 U 盘不再和 eMMC 共用 `root=UUID=`（否则“U 盘启动”会静默起 eMMC）。
 
@@ -336,9 +336,9 @@ jobs:
 
             | 文件 | 用途 |
             |---|---|
-            | bootarea-basic.img | 引导区整包（GPT @LBA0 + basic U-Boot @LBA64，16MB）：MaskRom `wl 0x0` 一次写入 |
-            | gpt.img / u-boot-basic.bin | 两件式引导（与上等价，分两次写）：GPT `wl 0x0` + U-Boot `wl 0x40` |
-            | 04_backup_gpt.img | 盘尾备份 GPT（`wl 0x01D1EFDF`）：用 bootarea-basic.img 或 gpt.img 重建主表后**建议一并写入**，否则 Linux 会报 backup GPT 不一致 |
+            | bootarea.img | 引导区整包（GPT @LBA0 + U-Boot @LBA64，16MB）：MaskRom `wl 0x0` 一次写入 |
+            | gpt.img / u-boot.bin | 两件式引导（与上等价，分两次写）：GPT `wl 0x0` + U-Boot `wl 0x40` |
+            | 04_backup_gpt.img | 盘尾备份 GPT（`wl 0x01D1EFDF`）：用 bootarea.img 或 gpt.img 重建主表后**建议一并写入**，否则 Linux 会报 backup GPT 不一致 |
             | 02_boot.img / 03_rootfs.img | boot 分区 `wl 0x8000` / rootfs 分区 `wl 0xC8000` |
 
             - SHA256SUMS.txt 覆盖以上全部文件；刷机命令见仓库 `firmware/README.md`
