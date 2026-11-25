@@ -159,9 +159,14 @@ jobs:
           ( cd ../../firmware && sha256sum -c SHA256SUMS.txt --ignore-missing ) \
             || { echo "ERROR: firmware/u-boot-basic.bin does not match firmware/SHA256SUMS.txt"; exit 1; }
           BASIC_VER=$(tr -d ' \n' < ../../firmware/u-boot-basic.version)
-          BASICTXT=$(strings ../../firmware/u-boot-basic.bin | grep -m1 "U-Boot 2025")
+          # year-agnostic: the release cadence has already crossed 2025 -> 2026;
+          # "|| true" guards set -e when grep misses, the -n check reports it.
+          BASICTXT=$(strings ../../firmware/u-boot-basic.bin | grep -m1 "U-Boot 20") || true
           [ -n "${BASIC_VER}" ] || { echo "ERROR: firmware/u-boot-basic.version is empty"; exit 1; }
-          case "${BASICTXT}" in *"-${BASIC_VER}-basic-"*) ;;
+          [ -n "${BASICTXT}" ] || { echo "ERROR: no U-Boot version string in firmware/u-boot-basic.bin"; exit 1; }
+          # tier segment dropped: tiers merged into a runtime gate in 2.4.0, the
+          # suffix is now "-fzs_p3" instead of "-basic-"; match on "-<ver>-" only.
+          case "${BASICTXT}" in *"-${BASIC_VER}-"*) ;;
             *) echo "ERROR: binary says '${BASICTXT}', version file says ${BASIC_VER}"; exit 1 ;;
           esac
           echo "paired basic U-Boot: ${BASIC_VER} (${BASICTXT})"
