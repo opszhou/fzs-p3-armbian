@@ -273,15 +273,15 @@ jobs:
 
           # ---- slim：flashkit 布局整盘镜像（01 引导区 + boot@32768 + rootfs@819200）----
           BOOT_START=32768; ROOT_START=819200; BOOT_SECS=786432
-          ROOT_SECS=$(stat -c%s ../../build/base/03_rootfs.img | awk '{printf "%d", $1/512 + ($1%512?1:0)}')
+          ROOT_SECS=$(stat -c%s build/base/03_rootfs.img | awk '{printf "%d", $1/512 + ($1%512?1:0)}')
           SLIM_SECS=$((ROOT_START + ROOT_SECS + 33))
           truncate -s $((SLIM_SECS * 512)) ${OUT}/slim.raw
           # boot area: sfdisk below writes protective MBR + primary GPT + entries
           # + disk-end backup for the freshly sized file, so nothing needs to be
           # pre-seeded at LBA0. Only the U-Boot payload is copied in explicitly.
-          dd if=../../firmware/u-boot.bin   of=${OUT}/slim.raw bs=512 seek=64 conv=notrunc status=none
-          dd if=../../build/base/02_boot.img   of=${OUT}/slim.raw bs=512 seek=${BOOT_START} conv=notrunc status=none
-          dd if=../../build/base/03_rootfs.img of=${OUT}/slim.raw bs=512 seek=${ROOT_START} conv=notrunc status=none
+          dd if=firmware/u-boot.bin of=${OUT}/slim.raw bs=512 seek=64 conv=notrunc status=none
+          dd if=build/base/02_boot.img of=${OUT}/slim.raw bs=512 seek=${BOOT_START} conv=notrunc status=none
+          dd if=build/base/03_rootfs.img of=${OUT}/slim.raw bs=512 seek=${ROOT_START} conv=notrunc status=none
           cd ${OUT}
           sfdisk --force slim.raw <<PTABLE
           label: gpt
